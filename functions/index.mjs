@@ -3,6 +3,6 @@ import {createWebhookHandler} from '../webhook.mjs';
 export const githubWebhook = {
   method: 'post',
   path: '/github-webhook/:service',
-  description: 'Restart an allowlisted Swarm service after a signed push to its GitHub default branch',
+  description: 'Restart a Swarm service when a signed default-branch push matches its Git clone URL',
   onRequest: createWebhookHandler()
 };

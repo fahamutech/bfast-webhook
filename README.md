@@ -1,9 +1,11 @@
 # bfast-webhook
 
 GitHub push webhook for BFast Cloud. Deploy this public repository as a FaaS
-service named `webhook`. A signed push to the repository's default branch can restart only the Swarm
-service mapped to that GitHub repository. The target service name comes from the
-webhook URL: `/github-webhook/<service>`.
+service named `webhook`. The target service name comes from the webhook URL:
+`/github-webhook/<service>`. After verifying a signed default-branch push, the
+handler reads that service's `GIT_CLONE_URL` from Docker. It restarts the service
+only when the URL matches the repository in GitHub's signed payload.
+No repository-to-service target list is required.
 
 ## Runtime
 
@@ -21,8 +23,7 @@ a Docker secret using the same value entered in GitHub's webhook settings:
 docker secret create github_webhook_secret /secure/path/github-webhook-secret
 ```
 
-Run this on a Swarm manager after the repository is public. Replace the example
-repository-to-service mapping with the actual source repository and service:
+Run this on a Swarm manager after the repository is public:
 
 ```bash
 docker service create \
@@ -38,7 +39,6 @@ docker service create \
   --env BFAST_RAW_BODY=true \
   --env BFAST_BODY_LIMIT=25mb \
   --env WEBHOOK_SECRET_FILE=/run/secrets/github_webhook_secret \
-  --env 'WEBHOOK_TARGETS_JSON={"fahamutech/example-functions":"example_faas"}' \
   --env PORT=3000 \
   --label traefik.enable=true \
   --label traefik.docker.network=bfastweb \
@@ -62,37 +62,37 @@ In the *source functions repository*, open Settings → Webhooks → Add webhook
 - Secret: the value in `github_webhook_secret`
 - Events: push only
 
-The source repository must be listed in `WEBHOOK_TARGETS_JSON` with the same
-service name as the URL. The receiver reads `repository.default_branch` from
+The target service must use `MODE=git` (or omit `MODE`, which defaults to `git`)
+and have `GIT_CLONE_URL` pointing to the sending GitHub repository. HTTP(S)
+GitHub clone URLs are supported, with or without `.git` or a trailing slash;
+repository names are compared without case sensitivity. The receiver reads `repository.default_branch` from
 GitHub's signed payload, so pushes to `main`, `master`, or any other default
 branch name trigger an update automatically. Pushes to other branches and branch
 deletions are ignored. For a `MODE=git` function service, the new task clones the
 repository's default branch on startup.
 
-## Fix a 403 repository/service mismatch
+## Update an existing webhook service
 
-A `Repository and service do not match` response means the signature was valid,
-but `WEBHOOK_TARGETS_JSON` does not map the payload's `repository.full_name` to
-the service at the end of the Payload URL. Replace the example mapping with
-your real values on the Swarm manager, preserving any other mappings you use:
-
-```bash
-docker service update \
-  --env-add 'WEBHOOK_TARGETS_JSON={"fahamutech/YOUR_REPO":"YOUR_SERVICE"}' \
-  webhook
-```
-
-Use `/github-webhook/YOUR_SERVICE` in GitHub, then redeliver the failed event.
-
-If you previously deployed with `START_SCRIPT`, migrate to the runtime image
-that supports raw JSON bodies and remove the old setting in the same update:
+This reloads the latest webhook code, enables raw body support, and removes the
+old custom server and target-list settings:
 
 ```bash
 docker service update \
   --image joshuamshana/bfastfunction:latest \
   --env-rm START_SCRIPT \
+  --env-rm WEBHOOK_TARGETS_JSON \
   --env-add BFAST_RAW_BODY=true \
   --env-add BFAST_BODY_LIMIT=25mb \
-  --env-add 'WEBHOOK_TARGETS_JSON={"fahamutech/YOUR_REPO":"YOUR_SERVICE"}' \
+  --force \
   webhook
 ```
+
+A 403 response now means the URL names a different service, the target is not
+in Git mode, or its `GIT_CLONE_URL` does not match the sending repository. Correct
+the webhook URL or target service configuration, then redeliver the failed event.
+Signature failures return 401. Docker inspection/update failures return 500 and
+do not mark the delivery as completed, so they can be retried.
+
+## Tests
+
+Run `npm test`. Tests use mocked Docker inspection and restart operations.
