@@ -42,7 +42,7 @@ docker service create \
   --env PORT=3000 \
   --label traefik.enable=true \
   --label traefik.docker.network=bfastweb \
-  --label 'traefik.http.routers.webhook.rule=Host(`webhook-faas.bfast.smartstock.co.tz`)' \
+  --label 'traefik.http.routers.webhook.rule=Host(`webhook-faas.bfast.<bfast-cloud-host-domain>`)' \
   --label traefik.http.routers.webhook.tls=true \
   --label traefik.http.routers.webhook.tls.certresolver=le \
   --label traefik.http.services.webhook.loadbalancer.server.port=3000 \
@@ -70,22 +70,6 @@ GitHub's signed payload, so pushes to `main`, `master`, or any other default
 branch name trigger an update automatically. Pushes to other branches and branch
 deletions are ignored. For a `MODE=git` function service, the new task clones the
 repository's default branch on startup.
-
-## Update an existing webhook service
-
-This reloads the latest webhook code, enables raw body support, and removes the
-old custom server and target-list settings:
-
-```bash
-docker service update \
-  --image joshuamshana/bfastfunction:latest \
-  --env-rm START_SCRIPT \
-  --env-rm WEBHOOK_TARGETS_JSON \
-  --env-add BFAST_RAW_BODY=true \
-  --env-add BFAST_BODY_LIMIT=25mb \
-  --force \
-  webhook
-```
 
 A 403 response now means the URL names a different service, the target is not
 in Git mode, or its `GIT_CLONE_URL` does not match the sending repository. Correct
