@@ -1,7 +1,7 @@
 # bfast-webhook
 
 GitHub push webhook for BFast Cloud. Deploy this public repository as a FaaS
-service named `webhook`. A signed push to `master` can restart only the Swarm
+service named `webhook`. A signed push to the repository's default branch can restart only the Swarm
 service mapped to that GitHub repository. The target service name comes from the
 webhook URL: `/github-webhook/<service>`.
 
@@ -63,6 +63,8 @@ In the *source functions repository*, open Settings → Webhooks → Add webhook
 - Events: push only
 
 The source repository must be listed in `WEBHOOK_TARGETS_JSON` with the same
-service name as the URL. Only `master` pushes trigger an update. For a `MODE=git`
-function service, the source repository's default branch must be `master` so the
-new task clones the pushed code.
+service name as the URL. The receiver reads `repository.default_branch` from
+GitHub's signed payload, so pushes to `main`, `master`, or any other default
+branch name trigger an update automatically. Pushes to other branches and branch
+deletions are ignored. For a `MODE=git` function service, the new task clones the
+repository's default branch on startup.

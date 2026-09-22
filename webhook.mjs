@@ -52,7 +52,9 @@ export function createWebhookHandler({
     let payload;
     try { payload = JSON.parse(body.toString('utf8')); }
     catch { return reply(res, 400, 'Invalid JSON'); }
-    if (payload.ref !== 'refs/heads/master' || payload.deleted) return reply(res, 200, 'Branch ignored');
+    const defaultBranch = payload.repository?.default_branch;
+    if (typeof defaultBranch !== 'string' || !defaultBranch) return reply(res, 400, 'Missing default branch');
+    if (payload.ref !== `refs/heads/${defaultBranch}` || payload.deleted) return reply(res, 200, 'Branch ignored');
     if (targets[payload.repository?.full_name] !== service) return reply(res, 403, 'Repository and service do not match');
     const delivery = req.headers['x-github-delivery'];
     if (typeof delivery !== 'string' || !/^[a-f0-9-]{36}$/i.test(delivery)) return reply(res, 400, 'Invalid delivery ID');
