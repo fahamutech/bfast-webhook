@@ -5,13 +5,12 @@ service named `webhook`. A signed push to the repository's default branch can re
 service mapped to that GitHub repository. The target service name comes from the
 webhook URL: `/github-webhook/<service>`.
 
-## Why `START_SCRIPT` is required
+## Runtime
 
-`functions/index.mjs` exports the BFast function descriptor. The shared
-`bfast-function` runtime parses JSON before invoking descriptors, which removes
-the exact request bytes GitHub signs. `START_SCRIPT=node server.mjs` starts a
-small raw HTTP server that routes to the same descriptor handler, allowing exact
-SHA-256 signature verification without changing the shared runtime image.
+`functions/index.mjs` exports the BFast function descriptor, served directly by
+the normal runtime. Use a `bfastfunction` image with `BFAST_RAW_BODY` support and
+enable it so the handler can verify GitHub's signature against the original JSON
+bytes. The standard health and function discovery endpoints remain available.
 
 ## Create the Swarm service
 
@@ -36,7 +35,8 @@ docker service create \
   --secret github_webhook_secret \
   --env MODE=git \
   --env GIT_CLONE_URL=https://github.com/fahamutech/bfast-webhook.git \
-  --env 'START_SCRIPT=node server.mjs' \
+  --env BFAST_RAW_BODY=true \
+  --env BFAST_BODY_LIMIT=25mb \
   --env WEBHOOK_SECRET_FILE=/run/secrets/github_webhook_secret \
   --env 'WEBHOOK_TARGETS_JSON={"fahamutech/example-functions":"example_faas"}' \
   --env PORT=3000 \
@@ -68,3 +68,18 @@ GitHub's signed payload, so pushes to `main`, `master`, or any other default
 branch name trigger an update automatically. Pushes to other branches and branch
 deletions are ignored. For a `MODE=git` function service, the new task clones the
 repository's default branch on startup.
+
+## Fix a 403 repository/service mismatch
+
+A `Repository and service do not match` response means the signature was valid,
+but `WEBHOOK_TARGETS_JSON` does not map the payload's `repository.full_name` to
+the service at the end of the Payload URL. Replace the example mapping with
+your real values on the Swarm manager, preserving any other mappings you use:
+
+```bash
+docker service update \
+  --env-add 'WEBHOOK_TARGETS_JSON={"fahamutech/YOUR_REPO":"YOUR_SERVICE"}' \
+  webhook
+```
+
+Use `/github-webhook/YOUR_SERVICE` in GitHub, then redeliver the failed event.

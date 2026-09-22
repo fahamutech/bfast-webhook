@@ -2,9 +2,6 @@
   "name": "bfast-webhook",
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "start": "node server.mjs"
-  },
   "dependencies": {},
   "devDependencies": {},
   "private": true

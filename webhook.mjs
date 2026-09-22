@@ -32,16 +32,8 @@ export function createWebhookHandler({
   return async (req, res) => {
     const service = req.params?.service;
     if (!validService.test(service || '')) return reply(res, 404, 'Not found');
-    const chunks = [];
-    let bytes = 0;
-    try {
-      for await (const chunk of req) {
-        bytes += chunk.length;
-        if (bytes > 25 * 1024 * 1024) return reply(res, 413, 'Payload too large');
-        chunks.push(chunk);
-      }
-    } catch { return reply(res, 400, 'Invalid body'); }
-    const body = Buffer.concat(chunks);
+    const body = req.rawBody;
+    if (!Buffer.isBuffer(body)) return reply(res, 500, 'Runtime must enable BFAST_RAW_BODY=true');
     const signature = req.headers['x-hub-signature-256'];
     const expected = createHmac('sha256', secret).update(body).digest();
     if (typeof signature !== 'string' || !/^sha256=[a-f0-9]{64}$/i.test(signature) ||
