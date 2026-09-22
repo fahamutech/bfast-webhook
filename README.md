@@ -83,3 +83,16 @@ docker service update \
 ```
 
 Use `/github-webhook/YOUR_SERVICE` in GitHub, then redeliver the failed event.
+
+If you previously deployed with `START_SCRIPT`, migrate to the runtime image
+that supports raw JSON bodies and remove the old setting in the same update:
+
+```bash
+docker service update \
+  --image joshuamshana/bfastfunction:latest \
+  --env-rm START_SCRIPT \
+  --env-add BFAST_RAW_BODY=true \
+  --env-add BFAST_BODY_LIMIT=25mb \
+  --env-add 'WEBHOOK_TARGETS_JSON={"fahamutech/YOUR_REPO":"YOUR_SERVICE"}' \
+  webhook
+```
