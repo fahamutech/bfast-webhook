@@ -80,3 +80,84 @@ do not mark the delivery as completed, so they can be retried.
 ## Tests
 
 Run `npm test`. Tests use mocked Docker inspection and restart operations.
+
+## Service manager
+
+Open `https://<webhook-host>/admin` to sign in with one shared password, select an
+application service, edit its environment, replicas, CPU/memory limits and restart
+policy, then **Save & redeploy**. Image, networks, mounts, secrets, labels and other
+settings are preserved. Environment values are hidden until revealed; blank values
+are supported, and removing a row removes that variable on save. Multiline values
+are preserved. Zero replicas stops a service; zero CPU/memory limits means unlimited.
+An accepted update means Swarm has started reconciliation, not that the deployment
+has become healthy. Check service tasks/logs after deployment.
+
+### Enable on an existing webhook service
+
+Create two independent secrets on the Swarm manager. Put a strong shared password
+(at least 16 characters) into `/secure/path/admin-password` without committing it or
+putting it in shell history. Create a random JWT signing key separately:
+
+```bash
+openssl rand -hex 32 | docker secret create bfast_admin_jwt -
+docker secret create bfast_admin_password /secure/path/admin-password
+
+docker service update \
+  --replicas 1 \
+  --secret-add bfast_admin_password \
+  --secret-add bfast_admin_jwt \
+  --env-add ADMIN_PASSWORD_FILE=/run/secrets/bfast_admin_password \
+  --env-add ADMIN_JWT_SECRET_FILE=/run/secrets/bfast_admin_jwt \
+  --env-add ADMIN_ORIGIN=https://webhook-faas.bfast.smartstock.co.tz \
+  --env-add ADMIN_EXCLUDED_SERVICES=webhook \
+  --force webhook
+```
+
+Deploy this code and install its dependencies before enabling the routes. Existing
+Git-mode services fetch the published repository on startup. `ADMIN_ORIGIN` must
+match the browser's exact HTTPS origin, without a trailing slash or path. HTTPS is
+required; TLS can terminate at Traefik. Missing configuration disables the manager
+with HTTP 503 without disabling the GitHub webhook. Invalid configured secrets or
+origin fail startup. Secret files are trimmed, so avoid leading/trailing whitespace.
+
+Only replicated application services are shown. The server blocks both listing and
+direct access to names containing the `webhook`, `traefik`, `bfast`, or `control`
+underscore-delimited components, `bfast.app=bfast`, `bfast.control=true`,
+`PROJECT_ID=_BFAST_ADMIN`, services with host bind mounts, manager-only constraints,
+and names in comma-separated `ADMIN_EXCLUDED_SERVICES`. Global services are also
+excluded. Add `bfast.control=true` to any additional infrastructure service before
+exposing this manager. The exclusions cannot be edited through this UI.
+
+The shared password grants administration of all eligible services, including access
+to plaintext environment secrets. Only share it with trusted operators. Sessions last
+30 minutes, with HS256 JWTs in Secure/HttpOnly/SameSite=Strict host-only cookies,
+exact-origin and CSRF checks on writes, no-store responses, and a restrictive CSP.
+Tokens never go into browser local storage. Logout revokes the current session.
+A global limit of 10 login attempts/minute does not trust forwarded IP headers.
+Sessions and limits are held in memory: **run one replica**; restarting the manager
+revokes every session. To rotate credentials, attach replacement Docker secrets,
+update the secret file paths, and restart the manager. Use edge rate limiting as
+well if exposed publicly. Configuration values, passwords and JWTs are not logged.
+
+### Routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/admin` | Management page |
+| POST | `/admin/api/login` | `{ "password": "…" }`; sets JWT cookie and returns CSRF token |
+| GET | `/admin/api/session` | Validate session and retrieve CSRF token |
+| POST | `/admin/api/logout` | Revoke session and clear cookie |
+| GET | `/admin/api/services` | Eligible service IDs, names and desired replica counts |
+| GET | `/admin/api/services/:service` | Current environment, image, settings and version |
+| POST | `/admin/api/services/:service` | Save settings and redeploy |
+
+Writes require `Origin: <ADMIN_ORIGIN>`, `Content-Type: application/json`, and,
+except login, `X-CSRF-Token` from the session endpoint. Updates accept exactly
+`version`, `env` (array of `KEY=value` strings), `replicas`, `cpus`, `memoryMB`, and
+`restart` (`any`, `on-failure`, `none`). Use the version returned by GET. The Docker
+update includes this version to prevent concurrent changes from being overwritten;
+HTTP 409 requires reloading the service. Unknown fields and invalid settings are
+rejected. Docker secret contents are never returned by this API.
+
+Security references: [OWASP session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+and [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
