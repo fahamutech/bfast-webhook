@@ -2,6 +2,7 @@ import {request} from 'node:http';
 import {readFileSync} from 'node:fs';
 import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import {SignJWT, jwtVerify} from 'jose';
+import {secretReference, secretChoices, newSecret, secretAttachments} from './secrets.mjs';
 
 const cookieName = '__Host-bfast-admin';
 const ttl = 1800;
@@ -16,7 +17,7 @@ export function dockerRequest(method, path, body) {
       res.on('data', chunk => { data += chunk; if (data.length > 8_000_000) req.destroy(new Error('Response too large')); });
       res.on('end', () => {
         if (res.statusCode >= 400) return reject(fail(res.statusCode === 409 ? 409 : 502,
-          res.statusCode === 409 ? 'Service changed. Reload before saving.' : 'Docker operation failed'));
+          res.statusCode === 409 ? 'Docker resource changed or its name is already in use. Refresh and retry.' : 'Docker operation failed'));
         try { resolve(data ? JSON.parse(data) : {}); } catch { reject(fail(502, 'Invalid Docker response')); }
       });
     });
@@ -49,7 +50,7 @@ export function serviceDetail(service) {
 
 export function updatedSpec(service, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
-    || Object.keys(input).some(k => !['version', 'env', 'replicas', 'cpus', 'memoryMB', 'restart'].includes(k))) throw fail(400, 'Unsupported settings');
+    || Object.keys(input).some(k => !['version', 'env', 'replicas', 'cpus', 'memoryMB', 'restart', 'secrets'].includes(k))) throw fail(400, 'Unsupported settings');
   if (!Number.isSafeInteger(input.version) || input.version !== service.Version.Index) throw fail(409, 'Service changed. Reload before saving.');
   if (!Array.isArray(input.env) || input.env.length > 300) throw fail(400, 'Invalid environment variables');
   const keys = new Set();
@@ -127,13 +128,34 @@ export function createAdmin({password, jwtSecret, origin, docker = dockerRequest
     session: wrap(async (_,res,s) => res.json({csrf: s.csrf})),
     logout: wrap(async (_,res,s,c) => {sessions.delete(c.jti); res.setHeader('Set-Cookie',cookie('',0)); res.json({ok:true});}, {write:true}),
     list: wrap(async (_,res) => res.json((await docker('GET','/services')).filter(s => isEditable(s,excluded)).map(s => ({id:s.ID,name:s.Spec.Name,replicas:s.Spec.Mode.Replicated.Replicas ?? 1})))),
-    detail: wrap(async (req,res) => res.json(serviceDetail(await inspect(req.params.service)))),
+    detail: wrap(async (req,res) => {
+      const service = await inspect(req.params.service);
+      res.json({...serviceDetail(service), secrets:(service.Spec.TaskTemplate.ContainerSpec.Secrets || []).map(secretReference)});
+    }),
+    secrets: wrap(async (req,res) => {
+      const service = await inspect(req.params.service);
+      res.json(await secretChoices(docker, service, s => isEditable(s, excluded)));
+    }),
+    createSecret: wrap(async (req,res) => {
+      if (mutation) throw fail(409, 'An update is in progress. Try again shortly.');
+      mutation = true;
+      try {
+        const service = await inspect(req.params.service);
+        const spec = newSecret(service, req.body);
+        const result = await docker('POST', '/secrets/create', spec);
+        res.status(201).json({id:result.ID, name:spec.Name});
+      } finally {mutation = false;}
+    }, {write:true}),
     update: wrap(async (req,res) => {
       if (mutation) throw fail(409, 'An update is in progress. Try again shortly.');
       mutation = true;
       try {
-        if (JSON.stringify(req.body).length > 131072) throw fail(413,'Settings too large');
+        if ((JSON.stringify(req.body) || '').length > 131072) throw fail(413,'Settings too large');
         const service = await inspect(req.params.service), spec = updatedSpec(service,req.body);
+        if (req.body.secrets !== undefined) {
+          const choices = await secretChoices(docker, service, s => isEditable(s, excluded));
+          spec.TaskTemplate.ContainerSpec.Secrets = secretAttachments(service, req.body.secrets, choices);
+        }
         const result = await docker('POST',`/services/${service.ID}/update?version=${service.Version.Index}`,spec);
         res.json({ok:true,message:'Update accepted. Swarm is rolling out the new configuration.',warnings:result.Warnings || []});
       } finally {mutation = false;}
@@ -144,7 +166,7 @@ export function createAdmin({password, jwtSecret, origin, docker = dockerRequest
 export function configuredAdmin() {
   if (!process.env.ADMIN_PASSWORD_FILE || !process.env.ADMIN_JWT_SECRET_FILE || !process.env.ADMIN_ORIGIN) {
     const disabled = (_,res) => res.status(503).json({error:'Service manager is not configured'});
-    return Object.fromEntries(['page','script','style','login','session','logout','list','detail','update'].map(k => [k,disabled]));
+    return Object.fromEntries(['page','script','style','login','session','logout','list','detail','update','secrets','createSecret'].map(k => [k,disabled]));
   }
   return createAdmin({password:readFileSync(process.env.ADMIN_PASSWORD_FILE,'utf8').trim(),
     jwtSecret:readFileSync(process.env.ADMIN_JWT_SECRET_FILE,'utf8').trim(), origin:process.env.ADMIN_ORIGIN,

@@ -18,3 +18,6 @@ export const adminLogout = {method: 'post', path: '/admin/api/logout', onRequest
 export const adminServices = {method: 'get', path: '/admin/api/services', onRequest: admin.list};
 export const adminService = {method: 'get', path: '/admin/api/services/:service', onRequest: admin.detail};
 export const adminUpdate = {method: 'post', path: '/admin/api/services/:service', onRequest: admin.update};
+
+export const adminSecrets = {method: 'get', path: '/admin/api/services/:service/secrets', onRequest: admin.secrets};
+export const adminCreateSecret = {method: 'post', path: '/admin/api/services/:service/secrets', onRequest: admin.createSecret};

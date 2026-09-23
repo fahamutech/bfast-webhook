@@ -85,8 +85,8 @@ Run `npm test`. Tests use mocked Docker inspection and restart operations.
 
 Open `https://<webhook-host>/admin` to sign in with one shared password, select an
 application service, edit its environment, replicas, CPU/memory limits and restart
-policy, then **Save & redeploy**. Image, networks, mounts, secrets, labels and other
-settings are preserved. Environment values are hidden until revealed; blank values
+policy, then **Save & redeploy**. Image, networks, host mounts, labels and other
+settings are preserved. Secret attachments have their own editor. Environment values are hidden until revealed; blank values
 are supported, and removing a row removes that variable on save. Multiline values
 are preserved. Zero replicas stops a service; zero CPU/memory limits means unlimited.
 An accepted update means Swarm has started reconciliation, not that the deployment
@@ -152,12 +152,60 @@ well if exposed publicly. Configuration values, passwords and JWTs are not logge
 | POST | `/admin/api/services/:service` | Save settings and redeploy |
 
 Writes require `Origin: <ADMIN_ORIGIN>`, `Content-Type: application/json`, and,
-except login, `X-CSRF-Token` from the session endpoint. Updates accept exactly
+except login, `X-CSRF-Token` from the session endpoint. Updates accept
 `version`, `env` (array of `KEY=value` strings), `replicas`, `cpus`, `memoryMB`, and
-`restart` (`any`, `on-failure`, `none`). Use the version returned by GET. The Docker
+`restart` (`any`, `on-failure`, `none`), and optional `secrets` (see below). Use the version returned by GET. The Docker
 update includes this version to prevent concurrent changes from being overwritten;
 HTTP 409 requires reloading the service. Unknown fields and invalid settings are
 rejected. Docker secret contents are never returned by this API.
 
 Security references: [OWASP session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
 and [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
+
+### Application secrets
+
+The service editor includes a **Secrets** section:
+
+1. Expand **Create a secret for this service**, enter a versioned name such as
+   `database-password-v2` and its value, then click **Create secret**. The value is
+   stored immediately in Swarm and cleared from the input. It cannot be read back.
+2. Select the new secret and click **Attach secret**. Set the filename, numeric
+   owner UID/group GID, and read permissions (0400, 0440 or 0444). New attachments
+   default to root ownership and 0400; use your application's UID if it runs as a
+   non-root user.
+3. Use the displayed `/run/secrets/<filename>` path in the relevant environment
+   variable, for example `DATABASE_PASSWORD_FILE`, **only if your application
+   supports reading that variable as a file path**. Docker does not automatically
+   turn secret files into environment variable values.
+4. Click **Save & redeploy** to apply attachments and environment changes together.
+
+Names are prefixed with `app-<service-ID>-` and secrets are labelled as owned by
+that service. Only secrets owned by the selected service, or already attached to
+it, are selectable; secrets attached to protected infrastructure are excluded even
+if their ownership label matches. New values are limited to 64 KiB of UTF-8 text.
+The value is neither returned by the API nor logged. Creation does not attach the
+secret or restart the service. If you close the editor, the unattached secret is
+still available the next time you open that service.
+
+Docker secret values are immutable: create a new version, detach the old one, and
+attach the replacement under the same filename in a single save. **Detach on save**
+removes access from that service; it does not delete the Swarm secret. Global secret
+deletion and rotation of the webhook's own login/signing secrets are not exposed.
+The initial admin secrets must still be provisioned on the manager before login.
+See [Docker's secret documentation](https://docs.docker.com/engine/swarm/secrets/).
+
+Additional authenticated routes:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/admin/api/services/:service/secrets` | Selectable secret IDs and names, never values |
+| POST | `/admin/api/services/:service/secrets` | Create from `{ "name": "db-v2", "value": "…" }` |
+
+Service detail now includes `secrets` metadata. Service updates optionally accept
+`secrets: [{ "id": "…", "target": "db-password", "uid": "1000", "gid": "1000", "mode": 256 }]`.
+`mode` is a JSON number (256 = octal 0400, 288 = 0440, 292 = 0444).
+Omitting `secrets` preserves existing attachments; an empty array detaches all.
+The server resolves source names from Docker, validates ownership and mount paths,
+and rejects duplicate IDs/filenames. Creation and attachment updates use the same
+JWT, exact-origin and CSRF protection as other writes. A duplicate secret name
+returns HTTP 409; choose a new version name.
