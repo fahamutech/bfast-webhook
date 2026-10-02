@@ -20,15 +20,88 @@ async function list() {
     b.onclick = () => run(() => open(s.id)); $('services').append(b);
   }
 }
+const ENV_MAX = 131000, B64_HINT = /(b64|base64)/i, B64_LIKELY = /(cert|pem|key|keystore|credential|secret|json)/i;
+const utf8 = new TextDecoder('utf-8', {fatal:true});
+const cleanB64 = v => v.replace(/\s+/g,'');
+const validB64 = v => { const c = cleanB64(v); return c.length > 0 && c.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(c); };
+const toB64 = bytes => { let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i,i+0x8000)); return btoa(bin); };
+const fromB64 = v => Uint8Array.from(atob(cleanB64(v)), c => c.charCodeAt(0));
+function decodedText(bytes) { try {const t = utf8.decode(bytes); return /[\x00-\x08\x0e-\x1f]/.test(t) ? null : t;} catch {return null;} }
+const size = n => n < 1024 ? n + ' B' : (n/1024).toFixed(1) + ' KB';
+function guessKind(key, value) {
+  if (!value) return B64_HINT.test(key) ? 'base64' : 'text';
+  if (!validB64(value) || cleanB64(value).length < 16) return 'text';
+  if (B64_HINT.test(key) || B64_LIKELY.test(key)) return 'base64';
+  try {return decodedText(fromB64(value)) !== null && !/^[0-9]+$/.test(value) && !/\s/.test(value.trim()) ? 'base64' : 'text';} catch {return 'text';}
+}
+function mk(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; }
 function row(entry = '=') {
-  const i = entry.indexOf('='), wrapper = document.createElement('div'); wrapper.className = 'env-row';
-  const key = document.createElement('input'); key.value = entry.slice(0,i); key.placeholder = 'VARIABLE_NAME'; key.setAttribute('aria-label','Variable name'); key.required = true; key.pattern = '[A-Za-z_][A-Za-z0-9_]*';
-  const value = document.createElement('textarea'); value.value = entry.slice(i+1); value.setAttribute('aria-label','Variable value'); value.hidden = true; value.autocomplete = 'off';
-  const masked = document.createElement('input'); masked.type = 'password'; masked.value = 'hidden-value'; masked.readOnly = true; masked.setAttribute('aria-label','Hidden variable value');
-  const holder = document.createElement('div'); holder.append(masked,value);
-  const reveal = document.createElement('button'); reveal.type = 'button'; reveal.className = 'secondary'; reveal.textContent = 'Reveal'; reveal.onclick = () => {value.hidden = !value.hidden; masked.hidden = !value.hidden; reveal.textContent = value.hidden ? 'Reveal' : 'Hide';};
-  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove'; remove.onclick = () => wrapper.remove();
-  wrapper.append(key,holder,reveal,remove); wrapper.env = () => key.value + '=' + value.value; $('envs').append(wrapper);
+  const i = entry.indexOf('='), wrapper = mk('div', {className:'env-row'});
+  const key = mk('input', {value:entry.slice(0,i), placeholder:'VARIABLE_NAME', required:true, pattern:'[A-Za-z_][A-Za-z0-9_]*'}); key.setAttribute('aria-label','Variable name');
+  const value = mk('textarea', {value:entry.slice(i+1), hidden:true, autocomplete:'off', spellcheck:false}); value.setAttribute('aria-label','Variable value');
+  const masked = mk('input', {type:'password', value:'hidden-value', readOnly:true}); masked.setAttribute('aria-label','Hidden variable value');
+  const type = mk('select', {}, ...[['text','Text'],['file','File'],['base64','Base64']].map(([v,t]) => mk('option', {value:v, textContent:t}))); type.setAttribute('aria-label','Value type');
+  type.value = guessKind(key.value, value.value);
+  let typeTouched = type.value !== 'text', fileName = '';
+  const picker = mk('input', {type:'file', hidden:true});
+  const status = mk('small', {className:'muted env-status'});
+  const upload = mk('button', {type:'button', className:'secondary', onclick:() => picker.click()});
+  const view = mk('button', {type:'button', className:'secondary', textContent:'View decoded'});
+  const download = mk('button', {type:'button', className:'secondary', textContent:'Download'});
+  const reveal = mk('button', {type:'button', className:'secondary', textContent:'Reveal'});
+  const remove = mk('button', {type:'button', className:'secondary', textContent:'Remove', onclick:() => wrapper.remove()});
+  const preview = mk('pre', {className:'env-preview', hidden:true});
+  const tools = mk('div', {className:'env-tools'}, upload, view, download, status);
+  const holder = mk('div', {}, masked, value, tools, picker, preview);
+  function refresh() {
+    const k = type.value;
+    upload.textContent = k === 'base64' ? 'Upload file → Base64' : k === 'file' ? (fileName ? 'Replace file' : 'Choose file') : 'Load from file';
+    view.hidden = download.hidden = k !== 'base64';
+    value.placeholder = k === 'base64' ? 'Paste Base64 here, or upload a file to convert it' : k === 'file' ? 'File contents appear here after choosing a file' : 'Value';
+    let text = '';
+    if (k === 'base64' && value.value) {
+      if (!validB64(value.value)) text = '⚠ Not valid Base64';
+      else { const n = Math.floor(cleanB64(value.value).length * 3 / 4); text = size(n) + ' decoded'; }
+    } else if (k === 'file' && fileName) text = fileName + ' · ' + size(value.value.length);
+    else if (value.value) text = size(value.value.length);
+    status.textContent = text; status.classList.toggle('error', text.startsWith('⚠'));
+    if (!preview.hidden) showPreview();
+  }
+  function decoded() { if (!validB64(value.value)) throw new Error('Value is not valid Base64.'); return fromB64(value.value); }
+  function showPreview() {
+    try {const bytes = decoded(), t = decodedText(bytes); preview.textContent = t ?? `Binary data · ${size(bytes.length)}\n${[...bytes.subarray(0,64)].map(b => b.toString(16).padStart(2,'0')).join(' ')}${bytes.length > 64 ? ' …' : ''}`;}
+    catch(e) {preview.textContent = e.message;}
+  }
+  view.onclick = () => {preview.hidden = !preview.hidden; view.textContent = preview.hidden ? 'View decoded' : 'Hide decoded'; if (!preview.hidden) showPreview();};
+  download.onclick = () => run(async () => {const bytes = decoded(), a = mk('a', {href:URL.createObjectURL(new Blob([bytes])), download:(key.value || 'value') + '.bin'}); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);});
+  reveal.onclick = () => {value.hidden = !value.hidden; masked.hidden = !value.hidden; reveal.textContent = value.hidden ? 'Reveal' : 'Hide';};
+  picker.onchange = () => run(async () => {
+    const f = picker.files[0]; picker.value = ''; if (!f) return;
+    const bytes = new Uint8Array(await f.arrayBuffer()); let text = null;
+    if (type.value !== 'base64') { text = decodedText(bytes);
+      if (text === null) { type.value = 'base64'; typeTouched = true; message(`${f.name} is binary, so it was converted to Base64.`); } }
+    const next = type.value === 'base64' ? toB64(bytes) : text;
+    if (next.length > ENV_MAX) return message(`${f.name} is too large for an environment variable (limit ${size(ENV_MAX)} after encoding).`, true);
+    value.value = next; fileName = f.name; if (type.value === 'text') {type.value = 'file'; typeTouched = true;}
+    value.hidden = false; masked.hidden = true; reveal.textContent = 'Hide'; refresh();
+  });
+  type.onchange = () => {
+    typeTouched = true; const v = value.value;
+    if (type.value === 'base64' && v && !validB64(v)) { try {value.value = toB64(new TextEncoder().encode(v));} catch {} }
+    else if (type.value !== 'base64' && v && validB64(v) && guessKind(key.value,v) === 'base64') { try {const t = decodedText(fromB64(v)); if (t !== null) value.value = t;} catch {} }
+    refresh();
+  };
+  key.oninput = () => { if (!typeTouched && !value.value && B64_HINT.test(key.value)) {type.value = 'base64'; refresh();} };
+  value.oninput = () => { if (!typeTouched && type.value === 'text' && guessKind(key.value,value.value) === 'base64') {type.value = 'base64';} refresh(); };
+  value.onpaste = () => setTimeout(() => { if (type.value === 'base64' && validB64(value.value)) value.value = cleanB64(value.value); refresh(); });
+  wrapper.append(key,type,holder,reveal,remove);
+  wrapper.env = () => {
+    let v = value.value;
+    if (type.value === 'base64' && v) { if (!validB64(v)) {key.reportValidity(); throw new Error(`${key.value || 'Variable'} is not valid Base64.`);} v = cleanB64(v); }
+    if (v.length > ENV_MAX) throw new Error(`${key.value} is too large (limit ${size(ENV_MAX)}).`);
+    return key.value + '=' + v;
+  };
+  refresh(); $('envs').append(wrapper);
 }
 async function open(id) {
   const s = await api('/services/' + encodeURIComponent(id));
@@ -79,7 +152,7 @@ function secretRow(secret) {
   for (const [value,title] of [[256,'0400 · owner'],[288,'0440 · owner + group'],[292,'0444 · everyone']]) {const o = document.createElement('option'); o.value = value; o.textContent = title; mode.append(o);}
   mode.value = secret.mode ?? 256; label.append(mode); fields.append(label);
   const path = document.createElement('p'); path.className = 'muted';
-  const updatePath = () => {path.textContent = 'Container path: /run/secrets/' + target.value + ' — set the relevant environment variable to this path if your app supports it.';}; target.oninput = updatePath; updatePath(); wrapper.append(path);
+  const updatePath = () => {path.textContent = 'Container path: /run/secrets/' + target.value + ' — in current BFast Functions, set an environment variable to this path and BFast loads the secret value at startup.';}; target.oninput = updatePath; updatePath(); wrapper.append(path);
   const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Detach on save'; remove.onclick = () => wrapper.remove(); wrapper.append(remove);
   wrapper.secret = () => ({id:secret.id,target:target.value,uid:uid.value,gid:gid.value,mode:Number(mode.value)});
   $('secret-mounts').append(wrapper);

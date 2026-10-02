@@ -142,3 +142,9 @@ test('secret inputs reject paths, executable/writeable modes, duplicate mounts a
   assert.throws(()=>secretAttachments(service,[ref,ref],choices));
   assert.throws(()=>secretAttachments(service,[ref,{...ref,id:'second'}],choices));
 });
+test('accepts large Base64 env values but rejects ones over the per-variable limit',() => {
+  const {id,name,image,...input}=serviceDetail(service);
+  const big='K='+Buffer.alloc(90000,7).toString('base64');
+  assert.equal(updatedSpec(service,{...input,env:[big]}).TaskTemplate.ContainerSpec.Env[0],big);
+  assert.throws(()=>updatedSpec(service,{...input,env:['K='+'A'.repeat(131001)]}));
+});
