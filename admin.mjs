@@ -55,7 +55,7 @@ export function updatedSpec(service, input) {
   if (!Array.isArray(input.env) || input.env.length > 300) throw fail(400, 'Invalid environment variables');
   const keys = new Set();
   for (const entry of input.env) {
-    if (typeof entry !== 'string' || entry.length > 32768 || entry.includes('\0') || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry)) throw fail(400, 'Use valid KEY=value environment variables');
+    if (typeof entry !== 'string' || entry.length > 131000 || entry.includes('\0') || !/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry)) throw fail(400, 'Use valid KEY=value environment variables');
     const key = entry.slice(0, entry.indexOf('='));
     if (keys.has(key)) throw fail(400, 'Duplicate environment variable');
     keys.add(key);
@@ -150,7 +150,7 @@ export function createAdmin({password, jwtSecret, origin, docker = dockerRequest
       if (mutation) throw fail(409, 'An update is in progress. Try again shortly.');
       mutation = true;
       try {
-        if ((JSON.stringify(req.body) || '').length > 131072) throw fail(413,'Settings too large');
+        if ((JSON.stringify(req.body) || '').length > 1048576) throw fail(413,'Settings too large');
         const service = await inspect(req.params.service), spec = updatedSpec(service,req.body);
         if (req.body.secrets !== undefined) {
           const choices = await secretChoices(docker, service, s => isEditable(s, excluded));

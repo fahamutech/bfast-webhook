@@ -189,10 +189,12 @@ The service editor includes a **Secrets** section:
    owner UID/group GID, and read permissions (0400, 0440 or 0444). New attachments
    default to root ownership and 0400; use your application's UID if it runs as a
    non-root user.
-3. Use the displayed `/run/secrets/<filename>` path in the relevant environment
-   variable, for example `DATABASE_PASSWORD_FILE`, **only if your application
-   supports reading that variable as a file path**. Docker does not automatically
-   turn secret files into environment variable values.
+3. With a BFast Functions runtime that supports secret hydration, use the displayed
+   `/run/secrets/<filename>` path directly as the sensitive environment variable,
+   for example `DATABASE_PASSWORD=/run/secrets/database-password`. BFast replaces
+   the path with the file contents before loading the function project. Variables
+   ending in `_FILE` deliberately keep the path for libraries that implement their
+   own file-based configuration. Other runtimes must read the secret file themselves.
 4. Click **Save & redeploy** to apply attachments and environment changes together.
 
 Names are prefixed with `app-<service-ID>-` and secrets are labelled as owned by
