@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import express from 'express';
+import {request} from 'node:http';
 import {createAdmin} from '../admin.mjs';
 import {classify, updatedSpec, serviceDetail, actionSpec, newServiceSpec} from '../services.mjs';
 import {parseAccess, serializeUsers} from '../auth.mjs';
@@ -59,7 +60,8 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
     const data = await res.text(); return {status:res.status,headers:res.headers,data:(() => {try{return JSON.parse(data);}catch{return data;}})()};
   };
   const login = async (token='good') => {const r=await send('/login',{idToken:token}); if (r.status===200){cookie=r.headers.get('set-cookie').split(';')[0];csrf=r.data.csrf;} return r;};
-  return {send,calls,services,deliveryLog,login,advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
+  const raw = (path, host) => new Promise((resolve, reject) => { const req = request({host:'127.0.0.1', port:server.address().port, path, headers:{host}}, res => { res.resume(); res.on('end', () => resolve({status:res.statusCode, headers:res.headers})); }); req.on('error', reject); req.end(); });
+  return {send,raw,calls,services,deliveryLog,login,advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
 }
 const input = s => { const {id,name,image,labels,constraints,networks,...rest} = serviceDetail(s); return rest; };
 
@@ -192,7 +194,9 @@ test('swarm overview is admin-only and lists nodes and every service',async t =>
 });
 test('page, assets and config have restrictive CSP and no-store',async t => {
   const s=await setup(t);
-  for(const path of ['/admin','/admin/app.js','/admin/style.css','/config']) {const r=await s.send(path);assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(r.headers.get('content-security-policy'),/www\.gstatic\.com/);}
+  const moved=await s.raw('/admin','old-host.example.com'); assert.equal(moved.status,301); assert.equal(moved.headers.location,origin+'/admin');
+  const page=await s.raw('/admin','admin.example.com'); assert.equal(page.status,200); assert.match(page.headers['content-security-policy'],/frame-ancestors 'none'/);
+  for(const path of ['/admin/app.js','/admin/style.css','/config']) {const r=await s.send(path);assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(r.headers.get('content-security-policy'),/www\.gstatic\.com/);}
   assert.equal((await s.send('/config')).data.firebase.projectId,'bfastapp');
 });
 test('access policy parsing tolerates whitespace, case and duplicates',() => {

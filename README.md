@@ -141,7 +141,7 @@ cookie. No service account is required. To use another Firebase project set
 | --- | --- | --- |
 | `WEBHOOK_SECRET_FILE` | yes | GitHub webhook secret file |
 | `ADMIN_JWT_SECRET_FILE` | yes | 32+ character session signing key file |
-| `ADMIN_ORIGIN` | yes | Exact HTTPS origin of the console, no trailing slash |
+| `ADMIN_ORIGIN` | yes | Exact HTTPS origin of the console, no trailing slash, e.g. `https://cloud.smartstock.co.tz`. Other hostnames routed to the service keep serving GitHub webhooks, and their `/admin` page redirects here |
 | `ADMIN_EMAILS` | yes | Comma-separated Google accounts with full administration |
 | `SERVICE_USERS` | managed | `user@gmail.com:svc_a,svc_b;other@gmail.com:svc_b` — per-user service access. Edited from the **Users & access** page; you rarely set it by hand |
 | `SWARM_CLUSTER`, `SWARM_HOST_DOMAIN` | recommended | Default hostnames for new services: `<project>-faas.<cluster>.<domain>` and `<project>.api.<domain>` |

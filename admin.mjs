@@ -20,7 +20,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   if (!parseAccess(adminEmails).admins.size) throw new Error('ADMIN_EMAILS must list at least one Google account');
   const verify = verifyIdToken || createFirebaseVerifier(firebaseConfig.projectId);
   const sessions = createSessions({jwtSecret, origin, now});
-  const authHost = `https://${firebaseConfig.authDomain}`;
+  const authHost = `https://${firebaseConfig.authDomain}`, originHost = new URL(origin).host;
   const headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
     'Content-Security-Policy': `default-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self'; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${authHost}; frame-src ${authHost} https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`};
   let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null};
@@ -104,7 +104,11 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   };
 
   return {
-    page: wrap(async (_, res) => res.type('html').send(asset('index.html')), {publicRoute: true}),
+    // Sessions and sign-in only work on ADMIN_ORIGIN, so other hostnames routed here (older aliases) redirect to it.
+    page: wrap(async (req, res) => {
+      if (req.headers.host && req.headers.host.toLowerCase() !== originHost) return res.redirect(301, `${origin}/admin`);
+      res.type('html').send(asset('index.html'));
+    }, {publicRoute: true}),
     script: wrap(async (_, res) => res.type('js').send(asset('app.js')), {publicRoute: true}),
     style: wrap(async (_, res) => res.type('css').send(asset('style.css')), {publicRoute: true}),
     config: wrap(async (_, res) => res.json({firebase: firebaseConfig, defaults: {cluster, hostDomain, image: defaultImage}}), {publicRoute: true}),
