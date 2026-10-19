@@ -9,15 +9,24 @@ export const githubWebhook = {
 
 import {configuredAdmin} from '../admin.mjs';
 const admin = configuredAdmin();
-export const adminPage = {method: 'get', path: '/admin', onRequest: admin.page};
-export const adminScript = {method: 'get', path: '/admin/app.js', onRequest: admin.script};
-export const adminStyle = {method: 'get', path: '/admin/style.css', onRequest: admin.style};
-export const adminLogin = {method: 'post', path: '/admin/api/login', onRequest: admin.login};
-export const adminSession = {method: 'get', path: '/admin/api/session', onRequest: admin.session};
-export const adminLogout = {method: 'post', path: '/admin/api/logout', onRequest: admin.logout};
-export const adminServices = {method: 'get', path: '/admin/api/services', onRequest: admin.list};
-export const adminService = {method: 'get', path: '/admin/api/services/:service', onRequest: admin.detail};
-export const adminUpdate = {method: 'post', path: '/admin/api/services/:service', onRequest: admin.update};
-
-export const adminSecrets = {method: 'get', path: '/admin/api/services/:service/secrets', onRequest: admin.secrets};
-export const adminCreateSecret = {method: 'post', path: '/admin/api/services/:service/secrets', onRequest: admin.createSecret};
+const route = (method, path, onRequest) => ({method, path, onRequest});
+export const adminPage = route('get', '/admin', admin.page);
+export const adminScript = route('get', '/admin/app.js', admin.script);
+export const adminStyle = route('get', '/admin/style.css', admin.style);
+export const adminConfig = route('get', '/admin/api/config', admin.config);
+export const adminLogin = route('post', '/admin/api/login', admin.login);
+export const adminSession = route('get', '/admin/api/session', admin.session);
+export const adminLogout = route('post', '/admin/api/logout', admin.logout);
+export const adminSwarm = route('get', '/admin/api/swarm', admin.swarm);
+export const adminUsers = route('get', '/admin/api/users', admin.users);
+export const adminSaveUsers = route('post', '/admin/api/users', admin.saveUsers);
+export const adminServices = route('get', '/admin/api/services', admin.list);
+export const adminCreate = route('post', '/admin/api/services', admin.create);
+export const adminService = route('get', '/admin/api/services/:service', admin.detail);
+export const adminUpdate = route('post', '/admin/api/services/:service', admin.update);
+export const adminRemove = route('delete', '/admin/api/services/:service', admin.remove);
+export const adminAction = route('post', '/admin/api/services/:service/actions', admin.action);
+export const adminTasks = route('get', '/admin/api/services/:service/tasks', admin.tasks);
+export const adminLogs = route('get', '/admin/api/services/:service/logs', admin.logs);
+export const adminSecrets = route('get', '/admin/api/services/:service/secrets', admin.secrets);
+export const adminCreateSecret = route('post', '/admin/api/services/:service/secrets', admin.createSecret);

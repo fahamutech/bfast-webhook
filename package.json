@@ -6,7 +6,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "google-auth-library": "^11.1.0",
     "jose": "^6.2.12"
   },
   "private": true,
