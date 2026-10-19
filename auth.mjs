@@ -58,28 +58,42 @@ export function createFirebaseVerifier(projectId) {
   };
 }
 
-export function createSessions({jwtSecret, origin, ttl = 8 * 3600, now = () => Date.now()}) {
+// Sessions are short-lived HS256 cookies that renew while in use.
+// ttl: lifetime of one token; renewAfter: age at which a request gets a fresh token;
+// maxAge: absolute limit from sign-in, after which Google sign-in is required again.
+// Each token carries t (issue time, ms) so a per-user "valid after" time can end sessions durably.
+export function createSessions({jwtSecret, origin, ttl = 3600, renewAfter = 600, maxAge = 12 * 3600, now = () => Date.now()}) {
   const key = Buffer.from(jwtSecret);
   const revoked = new Map();
   const csrfFor = jti => createHmac('sha256', key).update(`csrf:${jti}`).digest('hex');
+  const sign = async ({email, name, picture, jti, start}) => {
+    const iat = Math.floor(now() / 1000), exp = Math.min(iat + ttl, Math.floor(start / 1000) + maxAge);
+    return new SignJWT({name, picture, t: now(), ast: start}).setProtectedHeader({alg: 'HS256', typ: 'JWT'})
+      .setIssuer(origin).setAudience('bfast-admin').setSubject(email).setJti(jti).setIssuedAt(iat).setExpirationTime(exp).sign(key);
+  };
   return {
-    ttl,
+    ttl, maxAge,
     cookie: (value, age) => `${cookieName}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${age}`,
     async issue(user) {
-      const jti = randomBytes(24).toString('hex'), iat = Math.floor(now() / 1000);
-      const token = await new SignJWT({name: user.name, picture: user.picture}).setProtectedHeader({alg: 'HS256', typ: 'JWT'})
-        .setIssuer(origin).setAudience('bfast-admin').setSubject(user.email).setJti(jti).setIssuedAt(iat).setExpirationTime(iat + ttl).sign(key);
-      return {token, csrf: csrfFor(jti)};
+      const jti = randomBytes(24).toString('hex');
+      return {token: await sign({...user, jti, start: now()}), csrf: csrfFor(jti)};
     },
     async verify(cookieHeader) {
       for (const [jti, expires] of revoked) if (expires <= now()) revoked.delete(jti);
       try {
         const token = (cookieHeader || '').split(';').map(x => x.trim()).find(x => x.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
         const {payload} = await jwtVerify(token, key, {algorithms: ['HS256'], issuer: origin, audience: 'bfast-admin', currentDate: new Date(now())});
-        if (!payload.sub || !payload.jti || revoked.has(payload.jti)) throw new Error();
+        if (!payload.sub || !payload.jti || !Number.isFinite(payload.t) || !Number.isFinite(payload.ast) || revoked.has(payload.jti)) throw new Error();
+        if (now() - payload.ast >= maxAge * 1000) throw new Error();
         return {...payload, email: payload.sub, csrf: csrfFor(payload.jti)};
       } catch { throw fail(401, 'Please sign in'); }
     },
-    revoke(claims) { if (revoked.size < 10000) revoked.set(claims.jti, (claims.exp || 0) * 1000); }
+    // A fresh token for the same session (same jti, so the CSRF token is unchanged), or null when not due yet.
+    async renew(claims) {
+      if (now() - claims.t < renewAfter * 1000 || now() - claims.ast >= maxAge * 1000 - 1000) return null;
+      const token = await sign({email: claims.email, name: claims.name, picture: claims.picture, jti: claims.jti, start: claims.ast});
+      return {token, maxAge: Math.max(1, Math.min(ttl, Math.floor((claims.ast + maxAge * 1000 - now()) / 1000)))};
+    },
+    revoke(claims) { if (revoked.size < 10000) revoked.set(claims.jti, Math.max(now(), claims.ast + maxAge * 1000)); }
   };
 }

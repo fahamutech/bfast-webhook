@@ -41,11 +41,12 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
     throw new Error('unexpected ' + method + ' ' + path);
   };
   const deliveryLog = createDeliveryLog();
-  const api = createAdmin({jwtSecret:'x'.repeat(40), origin, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com', webhookSecret:'master-secret', deliveryLog,
+  const make = () => createAdmin({jwtSecret:'x'.repeat(40), origin, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com', webhookSecret:'master-secret', deliveryLog,
     verifyIdToken: async token => { const a = accounts[token]; if (!a) throw Object.assign(new Error('bad token'),{status:401}); return {...a, picture:null}; }});
+  let current = make(); const api = new Proxy({}, {get: (_, k) => (req, res) => current[k](req, res)});
   const app = express(); app.use(express.json({limit:'1mb'}));
   app.get('/admin',api.page); app.get('/admin/app.js',api.script); app.get('/admin/style.css',api.style); app.get('/config',api.config);
-  app.post('/login',api.login); app.get('/session',api.session); app.post('/logout',api.logout);
+  app.post('/login',api.login); app.get('/session',api.session); app.post('/logout',api.logout); app.post('/sessions/end',api.endSessions);
   app.get('/swarm',api.swarm); app.get('/users',api.users); app.post('/users',api.saveUsers);
   app.get('/services',api.list); app.post('/services',api.create); app.get('/services/:service',api.detail); app.post('/services/:service',api.update);
   app.post('/services/:service/actions',api.action); app.get('/services/:service/tasks',api.tasks); app.get('/services/:service/logs',api.logs);
@@ -61,7 +62,7 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
   };
   const login = async (token='good') => {const r=await send('/login',{idToken:token}); if (r.status===200){cookie=r.headers.get('set-cookie').split(';')[0];csrf=r.data.csrf;} return r;};
   const raw = (path, host) => new Promise((resolve, reject) => { const req = request({host:'127.0.0.1', port:server.address().port, path, headers:{host}}, res => { res.resume(); res.on('end', () => resolve({status:res.statusCode, headers:res.headers})); }); req.on('error', reject); req.end(); });
-  return {send,raw,calls,services,deliveryLog,login,advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
+  return {send,raw,calls,services,deliveryLog,login,restart:()=>{current=make();},advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
 }
 const input = s => { const {id,name,image,labels,constraints,networks,...rest} = serviceDetail(s); return rest; };
 
@@ -278,4 +279,51 @@ test('auto-deploy explains why a service is not ready',async t => {
   s.services[1].Spec.TaskTemplate.ContainerSpec.Env=['MODE=npm','NPM_TAR=pkg'];
   const w=(await s.send('/services/other1/webhook')).data;
   assert.equal(w.ready,false); assert.match(w.problems[0],/MODE is "npm"/); assert.equal((await s.send('/services')).data[1].autoDeploy,'off');
+});
+
+const cookieOf = r => r.headers.get('set-cookie')?.split(';')[0];
+test('sessions last one hour, renew while used, keep the CSRF token and stop at the absolute limit',async t => {
+  const s=await setup(t);
+  const login=await s.login(); assert.match(login.headers.get('set-cookie'),/Max-Age=3600/);
+  const csrf=login.data.csrf; let cookie=cookieOf(login);
+  s.advance(5*60*1000); const early=await s.send('/session',undefined,{cookie}); assert.equal(early.status,200); assert.equal(early.headers.get('set-cookie'),null);
+  for (let i=0;i<20;i++) {
+    s.advance(50*60*1000);
+    const r=await s.send('/session',undefined,{cookie});
+    if (r.status!==200) { assert.ok(i>=13, 'absolute limit reached too early at step '+i); assert.equal(r.status,401); return; }
+    assert.equal(r.data.csrf,csrf); const next=cookieOf(r); assert.ok(next); cookie=next;
+  }
+  assert.fail('session outlived the 12-hour limit');
+});
+test('an idle session expires after one hour',async t => {
+  const s=await setup(t); const login=await s.login(); const cookie=cookieOf(login);
+  s.advance(61*60*1000); assert.equal((await s.send('/session',undefined,{cookie})).status,401);
+});
+test('signing out ends every session of that account, durably across restarts, via a label-only update',async t => {
+  const s=await setup(t);
+  const a=await s.login(); const b=await s.login();
+  const ca=cookieOf(a), cb=cookieOf(b);
+  s.advance(1000);
+  const before=structuredClone(s.services[2].Spec);
+  const out=await s.send('/logout',{},{cookie:ca,'x-csrf-token':a.data.csrf}); assert.equal(out.status,200); assert.equal(out.data.everywhere,true);
+  assert.equal((await s.send('/session',undefined,{cookie:cb})).status,401);
+  const after=s.services[2].Spec, keys=Object.keys(after.Labels).filter(k=>k.startsWith('bfast.session.after.'));
+  assert.equal(keys.length,1); assert.doesNotMatch(keys[0],/@/);
+  assert.equal(after.TaskTemplate.ForceUpdate,before.TaskTemplate.ForceUpdate); assert.deepEqual(after.TaskTemplate,before.TaskTemplate);
+  s.restart(); assert.equal((await s.send('/session',undefined,{cookie:cb})).status,401);
+  s.advance(1000); const again=await s.login(); assert.equal(again.status,200); assert.equal((await s.send('/session',undefined,{cookie:cookieOf(again)})).status,200);
+  // Labels older than one session lifetime are pruned on the next sign-out.
+  s.advance(2*3600*1000); const later=await s.login(); await s.send('/logout',{},{cookie:cookieOf(later),'x-csrf-token':later.data.csrf});
+  assert.equal(Object.keys(s.services[2].Spec.Labels).filter(k=>k.startsWith('bfast.session.after.')).length,1);
+});
+test('admins can end another user\'s sessions; users cannot',async t => {
+  const s=await setup(t);
+  const dev=await s.login('devtoken'); const devCookie=cookieOf(dev);
+  assert.equal((await s.send('/sessions/end',{email:'admin@example.com'},{cookie:devCookie,'x-csrf-token':dev.data.csrf})).status,403);
+  s.reset(); const adm=await s.login(); s.advance(1000);
+  assert.equal((await s.send('/sessions/end',{email:'not-an-email'})).status,400);
+  const r=await s.send('/sessions/end',{email:'DEV@example.com '}); assert.equal(r.status,200); assert.equal(r.data.durable,true);
+  assert.equal((await s.send('/session',undefined,{cookie:devCookie})).status,401);
+  assert.equal((await s.send('/session',undefined,{cookie:cookieOf(adm)})).status,200);
+  s.advance(1000); assert.equal((await s.login('devtoken')).status,200);
 });

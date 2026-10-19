@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {dockerRequest, demuxLogs, filters, fail} from './docker.mjs';
-import {createFirebaseVerifier, createSessions, parseAccess, serializeUsers, usersInput, normalizeEmail} from './auth.mjs';
+import {createFirebaseVerifier, createSessions, parseAccess, serializeUsers, usersInput, normalizeEmail, validEmail} from './auth.mjs';
 import {classify, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv, parseImages} from './services.mjs';
 import {secretReference, secretChoices, newSecret, secretAttachments} from './secrets.mjs';
 import {serviceWebhookSecret, webhookGeneration, generationLabel, pausedLabel, repositoryFromCloneUrl, createDeliveryLog} from './webhook.mjs';
@@ -13,17 +14,44 @@ const asset = file => readFileSync(new URL(`./admin/${file}`, import.meta.url), 
 
 export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], verifyIdToken, firebaseConfig = defaultFirebaseConfig,
   adminEmails = '', serviceUsers = '', selfName = 'webhook', cluster = '', hostDomain = '',
-  defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', contactEmail = 'mama27j@gmail.com', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
+  defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', sessionMinutes = 60, sessionMaxHours = 12, contactEmail = 'mama27j@gmail.com', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
   now = () => Date.now()} = {}) {
   if (!jwtSecret || jwtSecret.length < 32) throw new Error('ADMIN_JWT_SECRET_FILE must hold a 32+ character signing key');
   if (!origin || new URL(origin).origin !== origin || !origin.startsWith('https://')) throw new Error('ADMIN_ORIGIN must be an exact HTTPS origin');
   if (!parseAccess(adminEmails).admins.size) throw new Error('ADMIN_EMAILS must list at least one Google account');
   const verify = verifyIdToken || createFirebaseVerifier(firebaseConfig.projectId);
-  const sessions = createSessions({jwtSecret, origin, now});
+  const sessions = createSessions({jwtSecret, origin, now, ttl: Math.round(sessionMinutes * 60), renewAfter: Math.max(60, Math.round(sessionMinutes * 15)), maxAge: Math.round(sessionMaxHours * 3600)});
   const authHost = `https://${firebaseConfig.authDomain}`, originHost = new URL(origin).host;
   const headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
     'Content-Security-Policy': `default-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${authHost}; frame-src ${authHost} https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`};
-  let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null, images: []};
+  let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null, images: [], signouts: new Map()};
+  // Durable sign-out: "sessions valid after" times per user, stored as labels on this service so they survive
+  // restarts. Label-only updates do not restart tasks. Keys use a hash so emails never appear in labels.
+  const signoutPrefix = 'bfast.session.after.';
+  const signoutKey = email => signoutPrefix + createHash('sha256').update(normalizeEmail(email)).digest('hex').slice(0, 32);
+  const localSignouts = new Map();
+  const readSignouts = labels => new Map(Object.entries(labels || {}).filter(([k, v]) => k.startsWith(signoutPrefix) && Number.isFinite(Number(v))).map(([k, v]) => [k, Number(v)]));
+  const signedOutAt = email => { const k = signoutKey(email); return Math.max(accessCache.signouts?.get(k) || 0, localSignouts.get(k) || 0); };
+  async function endSessions(email) {
+    const k = signoutKey(email), at = now();
+    localSignouts.set(k, at);
+    for (const [key, value] of localSignouts) if (value < at - sessions.ttl * 1000) localSignouts.delete(key);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const {self} = await loadAccess(true);
+      if (!self) return false;
+      const spec = structuredClone(self.Spec);
+      spec.Labels ||= {};
+      // Tokens issued before a sign-out expire within one session lifetime, so older entries can go.
+      for (const [key, value] of Object.entries(spec.Labels)) if (key.startsWith(signoutPrefix) && Number(value) < at - sessions.ttl * 1000) delete spec.Labels[key];
+      spec.Labels[k] = String(at);
+      try {
+        await docker('POST', `/services/${self.ID}/update?version=${self.Version.Index}`, spec);
+        accessCache = {at: 0, access: null, self: null, images: [], signouts: new Map()};
+        return true;
+      } catch (error) { if (error.status !== 409) return false; }
+    }
+    return false;
+  }
   const options = () => ({excluded, selfName});
 
   // Access policy lives in this service's own environment; read it live so user changes apply before the restart lands.
@@ -38,7 +66,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     if (self) { const e = envMap(self.Spec.TaskTemplate.ContainerSpec.Env); access = parseAccess(e.ADMIN_EMAILS ?? adminEmails, e.SERVICE_USERS ?? ''); if (e.ALLOWED_IMAGES !== undefined) images = parseImages(e.ALLOWED_IMAGES); }
     else access = parseAccess(adminEmails, serviceUsers);
     if (!access.admins.size) access = parseAccess(adminEmails, serviceUsers);
-    accessCache = {at: now(), access, self, images};
+    accessCache = {at: now(), access, self, images, signouts: readSignouts(self?.Spec?.Labels)};
     return accessCache;
   }
   const roleOf = (access, email) => access.admins.has(email) ? 'admin' : access.users.has(email) ? 'user' : null;
@@ -55,12 +83,16 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       let user = null;
       if (!publicRoute) {
         const claims = await sessions.verify(req.headers.cookie);
-        if (write && req.headers['x-csrf-token'] !== claims.csrf) throw fail(403, 'Invalid request token');
         const {access, images} = await loadAccess();
+        if (claims.t <= signedOutAt(claims.email)) throw fail(401, 'Your session was ended. Sign in again.');
+        if (write && req.headers['x-csrf-token'] !== claims.csrf) throw fail(403, 'Invalid request token');
         const role = roleOf(access, claims.email);
         if (!role) throw fail(401, 'Your access was removed. Sign in again.');
         if (admin && role !== 'admin') throw fail(403, 'Administrator access required');
         user = {email: claims.email, name: claims.name, picture: claims.picture, role, claims, access, images};
+        // Silent renewal: active sessions get a fresh cookie, up to the absolute limit.
+        const fresh = await sessions.renew(claims);
+        if (fresh) res.setHeader('Set-Cookie', sessions.cookie(fresh.token, fresh.maxAge));
       }
       await action(req, res, user);
     } catch (error) {
@@ -127,7 +159,20 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       res.json({csrf, user: {email: account.email, name: account.name, picture: account.picture, role}});
     }, {publicRoute: true, write: true}),
     session: wrap(async (_, res, u) => res.json({csrf: u.claims.csrf, user: {email: u.email, name: u.name, picture: u.picture, role: u.role}, defaults: {cluster, hostDomain, image: u.images.length && !u.images.includes(defaultImage) ? u.images[0] : defaultImage, images: u.role === 'admin' ? (u.images.length ? u.images : [defaultImage]) : []}})),
-    logout: wrap(async (_, res, u) => { sessions.revoke(u.claims); res.setHeader('Set-Cookie', sessions.cookie('', 0)); res.json({ok: true}); }, {write: true}),
+    // Signing out ends every session of this account, on all devices, and survives restarts.
+    logout: wrap(async (_, res, u) => {
+      sessions.revoke(u.claims);
+      const durable = await endSessions(u.email);
+      res.setHeader('Set-Cookie', sessions.cookie('', 0));
+      res.json({ok: true, everywhere: durable});
+    }, {write: true}),
+    endSessions: wrap(async (req, res, u) => {
+      if (!req.body || typeof req.body !== 'object' || Object.keys(req.body).some(k => k !== 'email')) throw fail(400, 'Provide email');
+      const email = normalizeEmail(req.body.email);
+      if (!validEmail(email)) throw fail(400, 'Invalid email');
+      const durable = await endSessions(email);
+      res.json({ok: true, durable, message: `Sessions for ${email} ended${durable ? '' : ' until the management service restarts (it could not be updated)'}.${email === u.email ? ' Sign in again to continue.' : ''}`});
+    }, {write: true, admin: true}),
 
     list: wrap(async (_, res, u) => {
       const services = (await docker('GET', '/services')).filter(s => canSee(u.access, u.email, s));
@@ -279,7 +324,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   };
 }
 
-export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'webhook', 'webhookAction', 'create', 'swarm', 'users', 'saveUsers'];
+export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'endSessions', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'webhook', 'webhookAction', 'create', 'swarm', 'users', 'saveUsers'];
 
 export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
   if (!env.ADMIN_JWT_SECRET_FILE || !env.ADMIN_ORIGIN || !env.ADMIN_EMAILS) {
@@ -293,7 +338,8 @@ export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
   }
   return createAdmin({jwtSecret: readFileSync(env.ADMIN_JWT_SECRET_FILE, 'utf8').trim(), origin: env.ADMIN_ORIGIN, firebaseConfig,
     adminEmails: env.ADMIN_EMAILS, serviceUsers: env.SERVICE_USERS || '', selfName: env.SELF_SERVICE_NAME || 'webhook',
-    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '', contactEmail: env.SITE_CONTACT_EMAIL || 'mama27j@gmail.com',
+    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '',
+    sessionMinutes: Math.min(720, Math.max(5, Number(env.SESSION_MINUTES) || 60)), sessionMaxHours: Math.min(168, Math.max(1, Number(env.SESSION_MAX_HOURS) || 12)), contactEmail: env.SITE_CONTACT_EMAIL || 'mama27j@gmail.com',
     webhookSecret: env.WEBHOOK_SECRET_FILE ? readFileSync(env.WEBHOOK_SECRET_FILE, 'utf8').trim() : '', acceptSharedSecret: env.WEBHOOK_ACCEPT_SHARED_SECRET !== 'false', deliveryLog,
     excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean)});
 }

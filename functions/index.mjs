@@ -20,6 +20,7 @@ export const adminConfig = route('get', '/admin/api/config', admin.config);
 export const adminLogin = route('post', '/admin/api/login', admin.login);
 export const adminSession = route('get', '/admin/api/session', admin.session);
 export const adminLogout = route('post', '/admin/api/logout', admin.logout);
+export const adminEndSessions = route('post', '/admin/api/sessions/end', admin.endSessions);
 export const adminSwarm = route('get', '/admin/api/swarm', admin.swarm);
 export const adminUsers = route('get', '/admin/api/users', admin.users);
 export const adminSaveUsers = route('post', '/admin/api/users', admin.saveUsers);

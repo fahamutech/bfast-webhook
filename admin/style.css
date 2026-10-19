@@ -112,3 +112,4 @@ body.signed-out #message:not(.error) span{background:rgba(62,230,164,.12);color:
 .login-links a{color:#a9c2b6;text-decoration:none;font-size:13px}.login-links a:hover{color:#e9f5ef}
 .login-screen :focus-visible{outline:2px solid #3ee6a4;outline-offset:3px}
 @media (prefers-reduced-motion:reduce){.login-card,.login-eyebrow .pulse{animation:none}}
+.admin-list{margin:12px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;display:grid;gap:8px}.admin-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;overflow-wrap:anywhere}.row-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:start}

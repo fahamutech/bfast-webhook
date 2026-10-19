@@ -152,6 +152,8 @@ cookie. No service account is required. To use another Firebase project set
 | `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
+| `SESSION_MINUTES` | no | Session cookie lifetime, renewed while in use (default `60`, 5–720) |
+| `SESSION_MAX_HOURS` | no | Absolute session limit before signing in again (default `12`, 1–168) |
 | `SITE_REGISTER_URL` | no | Where the website's sign-up buttons go. Defaults to an email to `SITE_CONTACT_EMAIL`; point it at a registration page once self-service sign-up exists |
 | `SITE_CONTACT_EMAIL` | no | Contact address shown on the website (default `mama27j@gmail.com`) |
 | `WEBHOOK_ACCEPT_SHARED_SECRET` | no | Set `false` once every GitHub hook uses its per-service secret (default `true`) |
@@ -226,7 +228,8 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
 | GET | `/admin`, `/admin/app.js`, `/admin/style.css`, `/admin/api/config` | public | Console and Firebase web config |
 | POST | `/admin/api/login` | public | `{ "idToken": "<Firebase ID token>" }` → session cookie + CSRF token |
 | GET | `/admin/api/session` | signed in | Current user, role and CSRF token |
-| POST | `/admin/api/logout` | signed in | Revoke session |
+| POST | `/admin/api/logout` | signed in | End all of this account's sessions |
+| POST | `/admin/api/sessions/end` | admin | `{ "email": "…" }`: end all sessions of that account |
 | GET | `/admin/api/services` | signed in | Visible services with status, replicas, hosts |
 | POST | `/admin/api/services` | admin | Create a service |
 | GET | `/admin/api/services/:service` | signed in | Detail, environment, secrets metadata, recent tasks |
@@ -242,10 +245,27 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
 
 Writes require `Origin: <ADMIN_ORIGIN>`, `Content-Type: application/json` and
 `X-CSRF-Token`. Updates must send the `version` returned by GET; HTTP 409 means
-the service changed and must be reloaded. Sessions last 8 hours in
-Secure/HttpOnly/SameSite=Strict cookies, responses are `no-store`, and the CSP
+the service changed and must be reloaded. Responses are `no-store`, and the CSP
 only allows Google/Firebase sign-in endpoints. Sign-in attempts are limited to 30
 per minute per replica. Run one replica.
+
+### Sessions
+
+- Sessions are Secure/HttpOnly/SameSite=Strict cookies that last `SESSION_MINUTES`
+  (default 60). Requests renew the cookie silently, and the console checks in every
+  10 minutes while it is open and visible. After `SESSION_MAX_HOURS` (default 12)
+  from sign-in, Google sign-in is required again. An idle session ends after one
+  session lifetime.
+- **Sign out** ends every session of that account on all devices. **End sessions**
+  on the Users page does the same for any administrator or user.
+- Both write a "valid after" time to a label on the management service
+  (`bfast.session.after.<hash of email>`). The label survives restarts, contains no
+  email address, and changing it does not restart the service. Labels older than one
+  session lifetime are removed automatically.
+- Removing an email from `ADMIN_EMAILS` or `SERVICE_USERS` also blocks it within
+  a few seconds. Replacing the `bfast_admin_jwt` secret ends every session.
+- Disabling an account in Google or Firebase blocks new sign-ins only; existing
+  sessions end when they expire, or immediately with **End sessions**.
 
 ## Website and docs
 

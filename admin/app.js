@@ -101,7 +101,15 @@ $('google').onclick = () => run(async () => {
     throw e;
   } finally { $('google').disabled = false; }
 });
-$('logout').onclick = () => run(async () => { await api('/logout', {}); signedOut(); message('Signed out.'); });
+$('logout').onclick = () => run(async () => { const r = await api('/logout', {}); signedOut(); message(r.everywhere ? 'Signed out on all your devices.' : 'Signed out.'); });
+// Keep the session alive while the console is open and visible; the server renews the cookie on these requests.
+async function keepAlive() { if (state.user && !document.hidden) { try { await api('/session'); } catch {} } }
+setInterval(keepAlive, 10 * 60 * 1000);
+document.addEventListener('visibilitychange', keepAlive);
+async function endSessionsFor(email) {
+  if (!confirm(`End every session for ${email}? They must sign in with Google again on all devices.`)) return;
+  const r = await api('/sessions/end', {email}); message(r.message);
+}
 $('refresh').onclick = () => run(loadServices);
 $('filter').oninput = renderServices;
 for (const b of $('admin-nav').querySelectorAll('button')) b.onclick = () => run(() => openView(b.dataset.view));
@@ -458,7 +466,9 @@ async function renderSwarm(content) {
 async function renderUsers(content) {
   content.append(mk('h2', {textContent: 'Users & access'}), mk('p', {className: 'muted', textContent: 'Loading…'}));
   const data = await api('/users'); content.replaceChildren(mk('h2', {textContent: 'Users & access'}));
-  content.append(mk('p', {className: 'muted', textContent: `Administrators (from ADMIN_EMAILS): ${data.admins.join(', ')}. Users below sign in with Google and only see the services assigned to them. Saving stores the list in the SERVICE_USERS environment of the "${data.selfName}" service, which restarts it.`}));
+  content.append(mk('p', {className: 'muted', textContent: `Users below sign in with Google and only see the services assigned to them. Saving stores the list in the SERVICE_USERS environment of the "${data.selfName}" service, which restarts it. "End sessions" signs a person out on every device immediately, without a restart.`}));
+  content.append(mk('div', {className: 'admin-list'}, mk('strong', {textContent: 'Administrators (ADMIN_EMAILS)'}),
+    ...data.admins.map(a => mk('div', {className: 'admin-row'}, mk('span', {textContent: a}), mk('button', {type: 'button', className: 'secondary small', textContent: 'End sessions', onclick: () => run(() => endSessionsFor(a))})))));
   if (!data.manageable) content.append(mk('p', {className: 'muted', textContent: `⚠ The management service "${data.selfName}" was not found in Swarm. Set SELF_SERVICE_NAME to its name to enable saving.`}));
   const rows = mk('div');
   function userRow(u = {email: '', services: []}) {
@@ -469,7 +479,10 @@ async function renderUsers(content) {
     function renderChips() { chips.replaceChildren(...[...assigned].map(n => mk('span', {className: 'chip', textContent: n}, mk('button', {type: 'button', textContent: '×', title: 'Remove', onclick: () => { assigned.delete(n); renderChips(); }}))), picker); }
     picker.onchange = () => { if (picker.value) assigned.add(picker.value); picker.value = ''; renderChips(); };
     renderChips();
-    row.append(email, chips, mk('button', {type: 'button', className: 'danger small', textContent: 'Remove user', onclick: () => row.remove()}));
+    const actions = mk('div', {className: 'row-actions'});
+    if (u.email) actions.append(mk('button', {type: 'button', className: 'secondary small', textContent: 'End sessions', onclick: () => run(() => endSessionsFor(u.email))}));
+    actions.append(mk('button', {type: 'button', className: 'danger small', textContent: 'Remove user', onclick: () => row.remove()}));
+    row.append(email, chips, actions);
     row.user = () => ({email: email.value.trim(), services: [...assigned]});
     rows.append(row);
   }
