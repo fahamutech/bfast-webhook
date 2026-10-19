@@ -259,6 +259,7 @@ content-type: application/json
 <section class="faq" aria-labelledby="faq-title">
   <div class="section-head reveal"><p class="eyebrow">FAQ</p><h2 id="faq-title">Questions developers ask.</h2></div>
   <div class="faq-list">
+    <details class="reveal"><summary>How do I get access?</summary><p>BFast Cloud is in early access. Click <b>Request early access</b> or email <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a> with your Google account and GitHub repository. We create your service and give your Google account access to the console.</p></details>
     <details class="reveal"><summary>What do I need to deploy?</summary><p>A GitHub repository containing a bfast-functions workspace. Your <code>package.json</code> dependencies install when the service starts, and the default branch is what runs.</p></details>
     <details class="reveal"><summary>Can I use private repositories?</summary><p>Yes. Set <code>GIT_USERNAME</code> and a <code>GIT_TOKEN</code> on the service, ideally through a Swarm secret.</p></details>
     <details class="reveal"><summary>How do I store API keys?</summary><p>Create a Swarm secret in the console, attach it to your service, then set an environment variable to its <code>/run/secrets/…</code> path. The runtime loads the value at start-up.</p></details>

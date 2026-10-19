@@ -153,7 +153,7 @@ cookie. No service account is required. To use another Firebase project set
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
 | `SITE_REGISTER_URL` | no | Where the website's sign-up buttons go. Defaults to an email to `SITE_CONTACT_EMAIL`; point it at a registration page once self-service sign-up exists |
-| `SITE_CONTACT_EMAIL` | no | Contact address shown on the website (default `fahamutechdevelopers@gmail.com`) |
+| `SITE_CONTACT_EMAIL` | no | Contact address shown on the website (default `mama27j@gmail.com`) |
 | `WEBHOOK_ACCEPT_SHARED_SECRET` | no | Set `false` once every GitHub hook uses its per-service secret (default `true`) |
 
 Missing `ADMIN_JWT_SECRET_FILE`, `ADMIN_ORIGIN` or `ADMIN_EMAILS` disables the

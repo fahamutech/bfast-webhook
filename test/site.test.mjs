@@ -21,7 +21,7 @@ test('home page is served with sign-up links, CSP and cacheable assets', async t
   assert.doesNotMatch(home.text, /\{\{/); assert.match(home.headers.get('content-security-policy'), /script-src 'self'/);
   for (const file of ['site.css', 'site.js', 'docs.js', 'favicon.svg']) assert.equal((await s.get('/site/' + file)).status, 200);
   assert.equal((await s.get('/site/..%2Fadmin.mjs')).status, 404); assert.equal((await s.get('/site/index.html')).status, 404);
-  const fallback = await (await setup(t)).get('/'); assert.match(fallback.text, /mailto:fahamutechdevelopers@gmail\.com\?subject=/);
+  const fallback = await (await setup(t)).get('/'); assert.match(fallback.text, /mailto:mama27j@gmail\.com\?subject=BFast%20Cloud%20early%20access%20request/);
 });
 
 test('docs render GitHub markdown with rewritten links, escaped HTML, TOC and caching', async t => {

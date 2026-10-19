@@ -67,11 +67,13 @@ git push -u origin main
 
 ## 6. Deploy on BFast Cloud
 
-1. Sign in to the [console](/admin) with Google.
-2. During early access an administrator creates your service with `MODE=git` and
-   your repository's `GIT_CLONE_URL`. It gets HTTPS hostnames such as
-   `my-functions-faas.<cluster>.<domain>`. Self-service sign-up is on the way.
-3. Open the service's **Auto-deploy** tab and copy the payload URL and secret into
+1. Request early access by emailing [mama27j@gmail.com](mailto:mama27j@gmail.com)
+   with the Google account you will sign in with and your repository URL.
+2. An administrator creates your service with `MODE=git` and your repository's
+   `GIT_CLONE_URL`, and gives your Google account access. The service gets HTTPS
+   hostnames such as `my-functions-faas.<cluster>.<domain>`.
+3. Sign in to the [console](/admin) with that Google account.
+4. Open the service's **Auto-deploy** tab and copy the payload URL and secret into
    your repository under **Settings → Webhooks** (content type `application/json`,
    push events).
 
