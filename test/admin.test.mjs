@@ -44,7 +44,7 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
   app.get('/admin',api.page); app.get('/admin/app.js',api.script); app.get('/admin/style.css',api.style); app.get('/config',api.config);
   app.post('/login',api.login); app.get('/session',api.session); app.post('/logout',api.logout);
   app.get('/swarm',api.swarm); app.get('/users',api.users); app.post('/users',api.saveUsers);
-  app.get('/services',api.list); app.post('/services',api.create); app.get('/services/:service',api.detail); app.post('/services/:service',api.update); app.delete('/services/:service',api.remove);
+  app.get('/services',api.list); app.post('/services',api.create); app.get('/services/:service',api.detail); app.post('/services/:service',api.update);
   app.post('/services/:service/actions',api.action); app.get('/services/:service/tasks',api.tasks); app.get('/services/:service/logs',api.logs);
   app.get('/services/:service/secrets',api.secrets); app.post('/services/:service/secrets',api.createSecret);
   const server = app.listen(0,'127.0.0.1'); await new Promise(resolve => server.once('listening',resolve));
@@ -121,16 +121,19 @@ test('management service edits keep it alive and keep the current admin',async t
   assert.equal((await s.send('/services/control/actions',{action:'restart'})).status,200);
   assert.equal((await s.send('/services/control/secrets')).status,403);
 });
-test('archive scales to zero and remembers replicas; start restores; restart needs a running service',async t => {
+test('archive scales to 0, unarchive scales to 1, restart needs a running service',async t => {
   const s=await setup(t); await s.login();
   s.services[0].Spec.Mode.Replicated.Replicas=3;
   assert.equal((await s.send('/services/abc123/actions',{action:'archive'})).status,200);
-  assert.equal(s.services[0].Spec.Mode.Replicated.Replicas,0); assert.equal(s.services[0].Spec.Labels['bfast.archive.replicas'],'3'); assert.equal(s.services[0].Spec.Labels.keep,'yes');
+  assert.equal(s.services[0].Spec.Mode.Replicated.Replicas,0); assert.equal(s.services[0].Spec.Labels.keep,'yes');
   assert.equal((await s.send('/services')).data[0].status,'archived');
+  assert.equal((await s.send('/services/abc123/actions',{action:'archive'})).status,400);
   assert.equal((await s.send('/services/abc123/actions',{action:'restart'})).status,400);
-  assert.equal((await s.send('/services/abc123/actions',{action:'start'})).status,200);
-  assert.equal(s.services[0].Spec.Mode.Replicated.Replicas,3); assert.equal(s.services[0].Spec.Labels['bfast.archive.replicas'],undefined);
-  assert.equal((await s.send('/services/abc123/actions',{action:'explode'})).status,400);
+  assert.equal((await s.send('/services/abc123/actions',{action:'unarchive'})).status,200);
+  assert.equal(s.services[0].Spec.Mode.Replicated.Replicas,1);
+  assert.equal((await s.send('/services/abc123/actions',{action:'unarchive'})).status,400);
+  assert.deepEqual(s.services[0].Spec.TaskTemplate.Networks,service.Spec.TaskTemplate.Networks);
+  for (const action of ['start','stop','delete','explode']) assert.equal((await s.send('/services/abc123/actions',{action})).status,400);
 });
 test('logs are demultiplexed and tailed; tasks listed newest first',async t => {
   const s=await setup(t); await s.login();
@@ -150,6 +153,10 @@ test('admins create services with Traefik labels, defaults and optional user ass
   assert.equal(spec.Labels['traefik.http.services.demo-faas.loadbalancer.server.port'],'3000'); assert.equal(spec.Labels['bfast.project'],'demo');
   assert.deepEqual(spec.TaskTemplate.ContainerSpec.Env,['PROJECT_ID=demo','PORT=3000','PRODUCTION=1','MODE=git','GIT_CLONE_URL=https://github.com/acme/demo.git']);
   assert.equal(spec.TaskTemplate.Resources.Limits.NanoCPUs,5e8); assert.equal(spec.Mode.Replicated.Replicas,0); assert.deepEqual(spec.TaskTemplate.Networks,[{Target:'bfastweb'}]);
+  // Same options as create_faas.sh: hostname, restart delay, TLS resolver, sticky cookie, network label.
+  assert.equal(spec.TaskTemplate.ContainerSpec.Hostname,'demo_faas'); assert.deepEqual(spec.TaskTemplate.RestartPolicy,{Condition:'any',Delay:5e9});
+  assert.equal(spec.Labels['traefik.http.routers.demo-faas.tls.certresolver'],'le'); assert.equal(spec.Labels['traefik.http.routers.demo-faas.tls'],'true');
+  assert.equal(spec.Labels['traefik.http.services.demo-faas.loadbalancer.sticky.cookie'],'true'); assert.equal(spec.Labels['traefik.docker.network'],'bfastweb'); assert.equal(spec.Labels['traefik.enable'],'true');
   const self=s.services.find(x=>x.Spec.Name==='webhook'); assert.ok(self.Spec.TaskTemplate.ContainerSpec.Env.includes(`SERVICE_USERS=${dev}:example_faas,demo_faas;new@example.com:demo_faas`));
   s.reset(); await s.login('devtoken'); assert.deepEqual((await s.send('/services')).data.map(x=>x.name),['demo_faas','example_faas']);
 });
@@ -169,13 +176,11 @@ test('user management rewrites SERVICE_USERS on the management service',async t 
   assert.equal(self.Spec.TaskTemplate.ContainerSpec.Env.some(e=>e.startsWith('SERVICE_USERS=')),false);
   s.reset(); assert.equal((await s.login('devtoken')).status,403);
 });
-test('delete requires the exact name, is admin-only and unassigns users',async t => {
+test('services cannot be deleted through the console',async t => {
   const s=await setup(t); await s.login();
-  assert.equal((await s.send('/services/abc123',{name:'wrong'},{},'DELETE')).status,400);
-  assert.equal((await s.send('/services/control',{name:'webhook'},{},'DELETE')).status,403);
-  assert.equal((await s.send('/services/abc123',{name:'example_faas'},{},'DELETE')).status,200);
-  assert.equal(s.services.some(x=>x.ID==='abc123'),false);
-  assert.equal(s.services.find(x=>x.Spec.Name==='webhook').Spec.TaskTemplate.ContainerSpec.Env.some(e=>e.startsWith('SERVICE_USERS=')),false);
+  assert.equal((await s.send('/services/abc123',{name:'example_faas'},{},'DELETE')).status,404);
+  assert.equal(s.calls.some(c=>c.method==='DELETE'),false);
+  assert.equal(s.services.some(x=>x.ID==='abc123'),true);
 });
 test('swarm overview is admin-only and lists nodes and every service',async t => {
   const s=await setup(t); await s.login();

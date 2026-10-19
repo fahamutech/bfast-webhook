@@ -157,12 +157,12 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     }), {write: true}),
     action: wrap(locked(async (req, res, u) => {
       const action = req.body?.action;
-      if (!['start', 'stop', 'archive', 'restart'].includes(action)) throw fail(400, 'Unknown action');
+      if (!['archive', 'unarchive', 'restart'].includes(action)) throw fail(400, 'Unknown action');
       const service = await inspect(req.params.service, u);
       if (service.kind === 'control' && action !== 'restart') throw fail(400, 'The management service can only be restarted');
       const spec = actionSpec(service, action);
       const result = await docker('POST', `/services/${service.ID}/update?version=${service.Version.Index}`, spec);
-      const text = {start: 'Starting', stop: 'Stopping (scaled to 0)', archive: 'Archived (scaled to 0)', restart: 'Restart requested'}[action];
+      const text = {archive: 'Archived (scaled to 0 replicas)', unarchive: 'Unarchived (scaled to 1 replica)', restart: 'Restart requested'}[action];
       res.json({ok: true, message: `${text}: ${service.Spec.Name}`, warnings: result.Warnings || []});
     }), {write: true}),
     secrets: wrap(async (req, res, u) => {
@@ -201,19 +201,6 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       res.status(201).json({id: result.ID, name: spec.Name, hosts: [...spec.Labels[`traefik.http.routers.${input.project}-faas.rule`].matchAll(/`([^`]+)`/g)].map(m => m[1]),
         message: `${spec.Name} created with ${spec.Mode.Replicated.Replicas} replica(s).${emails.length && !warning ? ' Users assigned; the management service restarts shortly.' : ''}${warning}`, warnings: result.Warnings || []});
     }), {write: true, admin: true}),
-    remove: wrap(locked(async (req, res, u) => {
-      const service = await inspect(req.params.service, u, {kinds: ['app']});
-      if (req.body?.name !== service.Spec.Name) throw fail(400, 'Type the exact service name to confirm deletion');
-      await docker('DELETE', `/services/${service.ID}`);
-      const {self} = await loadAccess(true);
-      if (self) {
-        const e = envMap(self.Spec.TaskTemplate.ContainerSpec.Env), access = parseAccess('', e.SERVICE_USERS);
-        let changed = false;
-        for (const services of access.users.values()) if (services.delete(service.Spec.Name)) changed = true;
-        if (changed) await updateSelf(self, s => { s.TaskTemplate.ContainerSpec.Env = withUsers(s.TaskTemplate.ContainerSpec.Env, access.users); });
-      }
-      res.json({ok: true, message: `${service.Spec.Name} removed. Its Docker secrets were kept.`});
-    }), {write: true, admin: true}),
 
     swarm: wrap(async (_, res) => {
       const [info, nodes, services, tasks] = await Promise.all([docker('GET', '/info'), docker('GET', '/nodes'), docker('GET', '/services'), docker('GET', `/tasks?filters=${filters({'desired-state': ['running']})}`)]);
@@ -240,7 +227,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   };
 }
 
-export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'create', 'remove', 'swarm', 'users', 'saveUsers'];
+export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'create', 'swarm', 'users', 'saveUsers'];
 
 export function configuredAdmin(env = process.env) {
   if (!env.ADMIN_JWT_SECRET_FILE || !env.ADMIN_ORIGIN || !env.ADMIN_EMAILS) {

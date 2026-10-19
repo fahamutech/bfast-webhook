@@ -24,7 +24,6 @@ export const adminServices = route('get', '/admin/api/services', admin.list);
 export const adminCreate = route('post', '/admin/api/services', admin.create);
 export const adminService = route('get', '/admin/api/services/:service', admin.detail);
 export const adminUpdate = route('post', '/admin/api/services/:service', admin.update);
-export const adminRemove = route('delete', '/admin/api/services/:service', admin.remove);
 export const adminAction = route('post', '/admin/api/services/:service/actions', admin.action);
 export const adminTasks = route('get', '/admin/api/services/:service/tasks', admin.tasks);
 export const adminLogs = route('get', '/admin/api/services/:service/logs', admin.logs);

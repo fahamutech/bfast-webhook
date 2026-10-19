@@ -1,7 +1,6 @@
 // Service classification, read models and Swarm spec builders.
 import {fail} from './docker.mjs';
 
-export const archiveLabel = 'bfast.archive.replicas';
 export const projectLabel = 'bfast.project';
 const env = list => Object.fromEntries((list || []).map(entry => {
   const index = entry.indexOf('=');
@@ -34,7 +33,7 @@ export function serviceSummary(service, tasks = [], kind = 'app') {
     .flatMap(([, rule]) => [...rule.matchAll(/`([^`]+)`/g)].map(m => m[1]));
   return {id: service.ID, name: spec.Name, kind, image: t.ContainerSpec.Image?.replace(/@sha256:.*$/, '') || '',
     mode: spec.Mode?.Global ? 'global' : 'replicated', replicas, running, states,
-    archived: replicas === 0, archivedReplicas: Number(spec.Labels?.[archiveLabel]) || 0,
+    archived: replicas === 0,
     status: replicas === 0 ? 'archived' : running >= (replicas ?? 1) ? 'running' : running > 0 ? 'degraded' : 'starting',
     project: spec.Labels?.[projectLabel] || variables.PROJECT_ID || null, hosts,
     gitCloneUrl: variables.GIT_CLONE_URL || null, modeEnv: variables.MODE || null,
@@ -100,18 +99,17 @@ export function updatedSpec(service, input, {allowImage = false} = {}) {
   return spec;
 }
 
-// Scale actions keep the rest of the spec untouched. Archive remembers the replica count.
+// Archive scales to 0 and unarchive scales to 1. The rest of the spec is untouched.
 export function actionSpec(service, action) {
   const spec = structuredClone(service.Spec), current = spec.Mode.Replicated?.Replicas ?? 1;
-  spec.Labels ||= {};
-  if (action === 'archive' || action === 'stop') {
-    if (current > 0) spec.Labels[archiveLabel] = String(current);
+  if (action === 'archive') {
+    if (current === 0) throw fail(400, 'Service is already archived');
     spec.Mode.Replicated.Replicas = 0;
-  } else if (action === 'start') {
-    spec.Mode.Replicated.Replicas = current > 0 ? current : Math.min(100, Number(spec.Labels[archiveLabel]) || 1);
-    delete spec.Labels[archiveLabel];
+  } else if (action === 'unarchive') {
+    if (current > 0) throw fail(400, 'Service is not archived');
+    spec.Mode.Replicated.Replicas = 1;
   } else if (action === 'restart') {
-    if (current === 0) throw fail(400, 'Start the service before restarting it');
+    if (current === 0) throw fail(400, 'Unarchive the service before restarting it');
     spec.TaskTemplate.ForceUpdate = (spec.TaskTemplate.ForceUpdate || 0) + 1;
   } else throw fail(400, 'Unknown action');
   return spec;
@@ -146,7 +144,6 @@ export function newServiceSpec(input, {cluster, hostDomain, defaultImage, networ
       Resources: {Limits: {NanoCPUs: Math.round(input.cpus * 1e9), MemoryBytes: Math.round(input.memoryMB * 1048576)}},
       RestartPolicy: {Condition: input.restart, Delay: 5_000_000_000}, Networks: [{Target: network}]},
     Mode: {Replicated: {Replicas: input.replicas}}};
-  if (input.replicas === 0) spec.Labels[archiveLabel] = '1';
   return spec;
 }
 

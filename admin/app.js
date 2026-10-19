@@ -100,12 +100,8 @@ async function openService(id, tab = 'overview') {
   })});
   if (s.kind === 'control') actions.append(act('Restart', 'restart', 'secondary', 'Restart the management service? You stay signed in.'));
   else {
-    if (s.replicas === 0) actions.append(act('▶ Start', 'start', '', `Start ${s.name} (${s.archivedReplicas || 1} replica(s))?`));
+    if (s.replicas === 0) actions.append(act('▶ Unarchive', 'unarchive', '', `Unarchive ${s.name}? It starts with 1 replica.`));
     else { actions.append(act('Restart', 'restart', 'secondary', `Restart ${s.name}? Tasks are replaced one by one.`)); actions.append(act('■ Archive', 'archive', 'danger', `Archive ${s.name}? This scales it to 0 replicas; configuration and secrets are kept.`)); }
-    if (state.user.role === 'admin') actions.append(mk('button', {type: 'button', className: 'danger', textContent: 'Delete', onclick: () => run(async () => {
-      const name = prompt(`Permanently delete ${s.name} from Swarm? Type the service name to confirm.`); if (name === null) return;
-      const r = await api(`/services/${encodeURIComponent(s.id)}`, {name}, 'DELETE'); message(r.message); state.selected = null; await loadServices(); openView(null);
-    })}));
   }
   const tabs = content.querySelector('.tabs');
   for (const b of tabs.querySelectorAll('button')) {

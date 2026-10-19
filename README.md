@@ -7,7 +7,7 @@ this public repository as a FaaS service named `webhook` on a Swarm manager.
   push whose repository matches that service's `GIT_CLONE_URL`.
 - `GET /admin` is a web console where people sign in with Google (Firebase
   Authentication, project `bfastapp`) and manage the services assigned to them:
-  view, create, start, archive (scale to 0), restart, delete, environment
+  view, create, archive (scale to 0), unarchive (scale to 1), restart, environment
   variables, Docker secrets, recent tasks, logs, Swarm status and user access.
 
 ## Runtime
@@ -118,12 +118,12 @@ console with HTTP 503 without affecting the GitHub webhook.
 ## Roles
 
 **Administrators** (`ADMIN_EMAILS`) see every application service plus the
-`webhook` management service itself. They can create and delete services, change
+`webhook` management service itself. They can create services, change
 images, view Swarm nodes and all services, and assign users.
 
 **Users** (`SERVICE_USERS`) sign in with Google and see only the services assigned
 to them. They can edit environment variables and secrets, change replicas and
-limits, start, archive, restart, and read tasks and logs for those services.
+limits, archive, unarchive, restart, and read tasks and logs for those services.
 
 Infrastructure is **protected** and read-only for everyone: global services,
 services with bind mounts or manager-only constraints, names containing
@@ -137,18 +137,23 @@ the console.
 Administrators can edit the `webhook` service's environment, image and limits
 and restart it. Guard rails: replicas stay ≥ 1, `WEBHOOK_SECRET_FILE`,
 `ADMIN_JWT_SECRET_FILE` and `ADMIN_ORIGIN` must stay set, `ADMIN_EMAILS` must keep
-the signed-in administrator, archive/delete are refused, and its secrets are not
+the signed-in administrator, archive is refused, and its secrets are not
 editable from the console. Saving users or any change to this service makes
 Swarm restart it; sessions are stateless JWTs, so people stay signed in.
 
 ## Day-to-day workflow
 
-- **Create**: *New service* → project ID, image, `MODE` and source
-  (`GIT_CLONE_URL`, `NPM_TAR` or `URL_TAR`), replicas, limits, extra hostnames,
-  users. The service is named `<project>_faas` on `bfastweb` with Traefik TLS labels
-  matching `create_faas.sh`. Create with 0 replicas to stage it archived.
-- **Archive / Start**: archive scales to 0 and remembers the replica count in the
-  `bfast.archive.replicas` label; start restores it. Configuration and secrets stay.
+- **Create**: *New service*. The console does not run `create_faas.sh`; it builds
+  the same Swarm spec through the Docker API (name and hostname `<project>_faas`,
+  `bfastweb` network, replicated, restart `any` with 5 s delay, Traefik port 3000,
+  TLS with resolver `le`, sticky cookie, both default hostnames, `PROJECT_ID`,
+  `PORT=3000`, `PRODUCTION=1`, extra env, image), plus optional CPU/memory limits,
+  extra hostnames and user assignment. The form asks for project ID, image, `MODE`
+  and source (`GIT_CLONE_URL`, `NPM_TAR` or `URL_TAR`), Git credentials, replicas,
+  limits, extra hostnames and users. Create with 0 replicas to stage it archived.
+- **Archive / Unarchive**: archive scales the service to 0 replicas; unarchive
+  scales it to 1. Configuration, secrets and labels are kept. Raise replicas
+  further from *Settings*.
 - **Restart**: forces a rolling task replacement (same as a webhook deploy).
 - **Environment**: text, file and Base64 values; removing a row deletes the
   variable. Saving redeploys.
@@ -159,7 +164,8 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
   auto-refreshed every 10 s. Nothing streams continuously.
 - **Swarm status** (admins): node roles, availability, resources, engine
   versions, and every service with running/desired counts.
-- **Delete** (admins): type the service name to confirm. Secrets are kept.
+- **Delete**: not available in the console by design. Archive instead, and use
+  `docker service rm` on the manager if a service must really be removed.
 
 ## Routes
 
@@ -173,8 +179,7 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
 | POST | `/admin/api/services` | admin | Create a service |
 | GET | `/admin/api/services/:service` | signed in | Detail, environment, secrets metadata, recent tasks |
 | POST | `/admin/api/services/:service` | signed in | Update `version`, `env`, `replicas`, `cpus`, `memoryMB`, `restart`, optional `secrets`, admin-only `image` |
-| DELETE | `/admin/api/services/:service` | admin | `{ "name": "<exact name>" }` |
-| POST | `/admin/api/services/:service/actions` | signed in | `{ "action": "start" \| "archive" \| "stop" \| "restart" }` |
+| POST | `/admin/api/services/:service/actions` | signed in | `{ "action": "archive" \| "unarchive" \| "restart" }` |
 | GET | `/admin/api/services/:service/tasks` | signed in | Recent tasks |
 | GET | `/admin/api/services/:service/logs?tail=200` | signed in | Last lines (10–1000) |
 | GET/POST | `/admin/api/services/:service/secrets` | signed in | List / create secrets |
