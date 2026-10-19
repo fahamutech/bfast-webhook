@@ -17,11 +17,59 @@ async function api(path, body, method) {
   return data;
 }
 
+// ---------- Sign-in screen: same look as the website, with a lighter swarm animation ----------
+let swarmStop = null;
+function startLoginSwarm() {
+  const canvas = document.querySelector('.login-swarm'); if (!canvas || swarmStop) return;
+  const ctx = canvas.getContext('2d'), reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W = 0, H = 0, parts = [], anchors = [], mouse = {x: -9999, y: -9999}, raf = 0, timer = 0, last = 0;
+  const build = () => {
+    const dpr = Math.min(devicePixelRatio || 1, 2); W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const narrow = W < 760;
+    anchors = (narrow ? [[.18, .12], [.85, .3], [.5, .92]] : [[.14, .76], [.62, .14], [.9, .7]]).map(([x, y], i) => ({x: x * W, y: y * H, r: narrow ? 70 : 120, i}));
+    parts = Array.from({length: Math.round(Math.min(narrow ? 40 : 100, W * H / (narrow ? 9000 : 14000)))}, (_, k) => {
+      const a = anchors[k % 3], ang = Math.random() * 6.283, rad = a.r * (.35 + Math.random() * .9);
+      return {a, ang, rad, speed: (.0012 + Math.random() * .0025) * (Math.random() < .5 ? -1 : 1), x: a.x + Math.cos(ang) * rad, y: a.y + Math.sin(ang) * rad, vx: 0, vy: 0, hot: 0};
+    });
+  };
+  const hex = (x, y, r) => { ctx.beginPath(); for (let i = 0; i < 6; i++) { const t = Math.PI / 3 * i - Math.PI / 6; ctx[i ? 'lineTo' : 'moveTo'](x + Math.cos(t) * r, y + Math.sin(t) * r); } ctx.closePath(); };
+  const frame = t => {
+    const dt = Math.min(48, t - last || 16); last = t; ctx.clearRect(0, 0, W, H);
+    for (const a of anchors) { hex(a.x, a.y, 16); ctx.strokeStyle = 'rgba(62,230,164,.7)'; ctx.lineWidth = 1.5; ctx.stroke(); hex(a.x, a.y, 5); ctx.fillStyle = 'rgba(62,230,164,.9)'; ctx.fill(); }
+    for (const p of parts) {
+      p.ang += p.speed * dt; const tx = p.a.x + Math.cos(p.ang) * p.rad, ty = p.a.y + Math.sin(p.ang) * p.rad;
+      p.vx += (tx - p.x) * .0016 * dt; p.vy += (ty - p.y) * .0016 * dt;
+      const mx = mouse.x - p.x, my = mouse.y - p.y, md = Math.hypot(mx, my);
+      if (md < 170 && md > 1) { const f = (1 - md / 170) * .06 * dt; p.vx += mx / md * f; p.vy += my / md * f; }
+      p.vx *= .9; p.vy *= .9; p.x += p.vx; p.y += p.vy; p.hot = Math.max(0, p.hot - dt / 1600);
+    }
+    ctx.lineWidth = 1;
+    for (let i = 0; i < parts.length; i++) for (let j = i + 1; j < parts.length; j++) {
+      const p = parts[i], q = parts[j], d2 = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+      if (d2 < 9000) { ctx.strokeStyle = `rgba(160,230,200,${(1 - d2 / 9000) * .2})`; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+    }
+    for (const p of parts) { ctx.fillStyle = p.hot > 0 ? `rgba(255,199,107,${.5 + p.hot * .5})` : 'rgba(205,240,224,.7)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.hot > 0 ? 2.6 : 1.6, 0, 6.283); ctx.fill(); }
+  };
+  const loop = t => { if (!document.hidden) frame(t); raf = requestAnimationFrame(loop); };
+  const onMove = e => { const r = canvas.getBoundingClientRect(); mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top; };
+  const onResize = () => { build(); if (reduce) frame(16); };
+  build(); addEventListener('resize', onResize); addEventListener('pointermove', onMove, {passive: true});
+  if (reduce) frame(16);
+  else { raf = requestAnimationFrame(loop); timer = setInterval(() => { if (!document.hidden && parts.length) { const p = parts[Math.random() * parts.length | 0]; p.a = anchors[(p.a.i + 1 + (Math.random() * 2 | 0)) % 3]; p.hot = 1; } }, 900); }
+  swarmStop = () => { cancelAnimationFrame(raf); clearInterval(timer); removeEventListener('resize', onResize); removeEventListener('pointermove', onMove); swarmStop = null; };
+}
+async function setRequestLink() {
+  try { const {contactEmail} = await api('/config'); if (contactEmail) $('request-access').href = `mailto:${contactEmail}?subject=${encodeURIComponent('BFast Cloud early access request')}`; } catch {}
+}
+
 function signedOut() {
+  document.body.classList.add('signed-out'); startLoginSwarm(); setRequestLink();
   state.csrf = null; state.user = null; state.selected = null; stopLogs(); state.resumeLogs = null;
   $('workspace').hidden = true; $('who').hidden = true; $('login').hidden = false; $('content').replaceChildren(mk('p', {className: 'muted empty', textContent: 'Select a service to manage it.'}));
 }
 function signedIn(data) {
+  document.body.classList.remove('signed-out'); swarmStop?.();
   state.csrf = data.csrf; state.user = data.user; state.defaults = data.defaults || state.defaults;
   $('login').hidden = true; $('workspace').hidden = false; $('who').hidden = false;
   $('who-text').textContent = `${data.user.email} · ${data.user.role}`;

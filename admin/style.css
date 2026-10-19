@@ -81,3 +81,34 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 }
 
 .notice{padding:12px 14px;background:#eef3fb;border:1px solid #cfdcf0;color:#2d4a6d;border-radius:8px;font-size:14px}input:disabled,select:disabled,input[readonly]{background:#f3f5f2;color:#56615c;cursor:not-allowed}.log-status{margin-left:auto}
+
+/* ===== Sign-in screen: matches the public website (dark, Space Grotesk, swarm) ===== */
+body.signed-out{background:#06120e;color:#e9f5ef;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+body.signed-out>header,body.signed-out>footer{display:none}
+body.signed-out main{max-width:none;padding:0}
+body.signed-out #message{position:fixed;top:16px;left:0;right:0;z-index:20;max-width:560px}
+body.signed-out #message.error span{background:rgba(255,125,107,.14);color:#ffb3a8;border:1px solid rgba(255,125,107,.35)}
+body.signed-out #message:not(.error) span{background:rgba(62,230,164,.12);color:#bff5de;border:1px solid rgba(62,230,164,.3)}
+.login-screen{position:relative;min-height:100vh;min-height:100svh;display:grid;place-items:center;padding:max(24px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom));overflow:hidden;
+  background:radial-gradient(900px 520px at 85% -10%,rgba(62,230,164,.16),transparent 60%),radial-gradient(700px 480px at -10% 110%,rgba(255,199,107,.07),transparent 60%),#06120e}
+.login-swarm{position:absolute;inset:0;width:100%;height:100%}
+.login-card{position:relative;width:min(440px,100%);padding:clamp(28px,6vw,44px);border-radius:24px;background:linear-gradient(180deg,rgba(14,33,25,.82),rgba(8,22,17,.86));border:1px solid rgba(160,230,200,.18);
+  box-shadow:0 40px 120px -40px rgba(0,0,0,.85),inset 0 1px 0 rgba(255,255,255,.05);backdrop-filter:blur(14px) saturate(1.3);-webkit-backdrop-filter:blur(14px) saturate(1.3);animation:loginIn .9s cubic-bezier(.2,.7,.1,1) both}
+@keyframes loginIn{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}
+.login-brand{display:inline-flex;align-items:center;gap:10px;color:#e9f5ef;text-decoration:none;font:600 20px "Space Grotesk",system-ui,sans-serif;letter-spacing:-.02em}
+.login-brand svg{width:28px;height:28px;color:#3ee6a4}.login-brand b{font-weight:400;color:#a9c2b6;margin-left:2px}
+.login-eyebrow{display:flex;align-items:center;gap:10px;margin:34px 0 12px;font:600 12px "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:#3ee6a4}
+.login-eyebrow .pulse{width:8px;height:8px;border-radius:50%;background:#3ee6a4;box-shadow:0 0 0 0 rgba(62,230,164,.6);animation:loginPulse 2s infinite}
+@keyframes loginPulse{70%{box-shadow:0 0 0 10px rgba(62,230,164,0)}100%{box-shadow:0 0 0 0 rgba(62,230,164,0)}}
+.login-card h1{font:600 clamp(36px,8vw,48px)/1.02 "Space Grotesk",system-ui,sans-serif;letter-spacing:-.03em;margin:0 0 14px;color:#e9f5ef}
+.login-lede{color:#a9c2b6;font-size:16px;line-height:1.6;margin:0 0 28px}
+.google-btn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:52px;padding:12px 20px;border-radius:999px;background:#fff;color:#1f1f1f;font:600 15px Inter,system-ui,sans-serif;border:0;cursor:pointer;
+  box-shadow:0 10px 40px -12px rgba(62,230,164,.55);transition:transform .25s cubic-bezier(.2,.7,.1,1),box-shadow .3s}
+.google-btn:hover{filter:none;transform:translateY(-1px);box-shadow:0 0 0 6px rgba(62,230,164,.14),0 14px 50px -10px rgba(62,230,164,.7)}
+.google-btn:disabled{opacity:.7;cursor:progress;transform:none}
+.google-btn svg{width:20px;height:20px;flex:none}
+.login-fine{margin:22px 0 0;color:#8aa69a;font-size:14px;text-align:center}.login-fine a{color:#3ee6a4;text-underline-offset:3px}
+.login-links{display:flex;justify-content:center;flex-wrap:wrap;gap:8px 20px;margin-top:26px;padding-top:20px;border-top:1px solid rgba(160,230,200,.12)}
+.login-links a{color:#a9c2b6;text-decoration:none;font-size:13px}.login-links a:hover{color:#e9f5ef}
+.login-screen :focus-visible{outline:2px solid #3ee6a4;outline-offset:3px}
+@media (prefers-reduced-motion:reduce){.login-card,.login-eyebrow .pulse{animation:none}}

@@ -13,7 +13,7 @@ const asset = file => readFileSync(new URL(`./admin/${file}`, import.meta.url), 
 
 export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], verifyIdToken, firebaseConfig = defaultFirebaseConfig,
   adminEmails = '', serviceUsers = '', selfName = 'webhook', cluster = '', hostDomain = '',
-  defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
+  defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', contactEmail = 'mama27j@gmail.com', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
   now = () => Date.now()} = {}) {
   if (!jwtSecret || jwtSecret.length < 32) throw new Error('ADMIN_JWT_SECRET_FILE must hold a 32+ character signing key');
   if (!origin || new URL(origin).origin !== origin || !origin.startsWith('https://')) throw new Error('ADMIN_ORIGIN must be an exact HTTPS origin');
@@ -22,7 +22,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   const sessions = createSessions({jwtSecret, origin, now});
   const authHost = `https://${firebaseConfig.authDomain}`, originHost = new URL(origin).host;
   const headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': `default-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self'; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${authHost}; frame-src ${authHost} https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`};
+    'Content-Security-Policy': `default-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${authHost}; frame-src ${authHost} https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`};
   let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null, images: []};
   const options = () => ({excluded, selfName});
 
@@ -112,7 +112,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     }, {publicRoute: true}),
     script: wrap(async (_, res) => res.type('js').send(asset('app.js')), {publicRoute: true}),
     style: wrap(async (_, res) => res.type('css').send(asset('style.css')), {publicRoute: true}),
-    config: wrap(async (_, res) => res.json({firebase: firebaseConfig, defaults: {cluster, hostDomain, image: defaultImage}}), {publicRoute: true}),
+    config: wrap(async (_, res) => res.json({firebase: firebaseConfig, contactEmail, defaults: {cluster, hostDomain, image: defaultImage}}), {publicRoute: true}),
     login: wrap(async (req, res) => {
       attempts = attempts.filter(t => now() - t < 60000);
       if (attempts.length >= 30) { res.setHeader('Retry-After', '60'); throw fail(429, 'Too many sign-in attempts. Try again in a minute.'); }
@@ -293,7 +293,7 @@ export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
   }
   return createAdmin({jwtSecret: readFileSync(env.ADMIN_JWT_SECRET_FILE, 'utf8').trim(), origin: env.ADMIN_ORIGIN, firebaseConfig,
     adminEmails: env.ADMIN_EMAILS, serviceUsers: env.SERVICE_USERS || '', selfName: env.SELF_SERVICE_NAME || 'webhook',
-    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '',
+    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '', contactEmail: env.SITE_CONTACT_EMAIL || 'mama27j@gmail.com',
     webhookSecret: env.WEBHOOK_SECRET_FILE ? readFileSync(env.WEBHOOK_SECRET_FILE, 'utf8').trim() : '', acceptSharedSecret: env.WEBHOOK_ACCEPT_SHARED_SECRET !== 'false', deliveryLog,
     excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean)});
 }
