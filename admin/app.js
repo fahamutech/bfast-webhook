@@ -18,7 +18,7 @@ async function api(path, body, method) {
 }
 
 function signedOut() {
-  state.csrf = null; state.user = null; state.selected = null; stopLogs();
+  state.csrf = null; state.user = null; state.selected = null; stopLogs(); state.resumeLogs = null;
   $('workspace').hidden = true; $('who').hidden = true; $('login').hidden = false; $('content').replaceChildren(mk('p', {className: 'muted empty', textContent: 'Select a service to manage it.'}));
 }
 function signedIn(data) {
@@ -74,7 +74,7 @@ function renderServices() {
   }
 }
 function showDetail(open) { $('workspace').classList.toggle('detail-open', open); if (open && matchMedia('(max-width: 900px)').matches) window.scrollTo({top: 0}); }
-$('back').onclick = () => { stopLogs(); state.selected = null; state.view = null; showDetail(false); setActive(); };
+$('back').onclick = () => { stopLogs(); state.resumeLogs = null; state.selected = null; state.view = null; showDetail(false); setActive(); };
 async function copy(text, label) {
   try { await navigator.clipboard.writeText(text); }
   catch { const t = mk('textarea', {value: text}); document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
@@ -83,7 +83,7 @@ async function copy(text, label) {
 function setActive() { for (const b of document.querySelectorAll('.nav-item')) b.classList.toggle('active', b.dataset.view === state.view); renderServices(); }
 
 async function openView(view) {
-  stopLogs(); state.view = view; state.selected = null; setActive(); showDetail(Boolean(view));
+  stopLogs(); state.resumeLogs = null; state.view = view; state.selected = null; setActive(); showDetail(Boolean(view));
   const content = $('content'); content.replaceChildren();
   if (view === 'swarm') return renderSwarm(content);
   if (view === 'users') return renderUsers(content);
@@ -93,7 +93,7 @@ async function openView(view) {
 
 // ---------- Service view ----------
 async function openService(id, tab = 'overview') {
-  stopLogs();
+  stopLogs(); state.resumeLogs = null;
   const s = await api('/services/' + encodeURIComponent(id));
   state.selected = s; state.view = null; setActive(); showDetail(true);
   const content = $('content'); content.replaceChildren($('service-view').content.cloneNode(true));
@@ -119,7 +119,7 @@ async function openService(id, tab = 'overview') {
   function showTab(name) {
     for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-selected', b.dataset.tab === name);
     for (const p of content.querySelectorAll('.panel')) p.hidden = p.dataset.panel !== name;
-    if (name !== 'logs') stopLogs();
+    if (name === 'logs') { state.resumeLogs = logs.start; logs.start(); } else { state.resumeLogs = null; stopLogs(); }
     if (name === 'deploy') run(() => deploy.load());
     const active = tabs.querySelector(`[data-tab="${name}"]`); tabs.scrollTo({left: active.offsetLeft - 16, behavior: 'smooth'});
   }
@@ -127,7 +127,7 @@ async function openService(id, tab = 'overview') {
   renderEnv(content.querySelector('[data-panel=env]'), s);
   if (s.kind !== 'control') await renderSecrets(content.querySelector('[data-panel=secrets]'), s);
   renderSettings(content.querySelector('[data-panel=settings]'), s);
-  renderLogs(content.querySelector('[data-panel=logs]'), s);
+  const logs = renderLogs(content.querySelector('[data-panel=logs]'), s);
   const deploy = renderDeploy(content.querySelector('[data-panel=deploy]'), s);
   showTab(tab);
 }
@@ -154,8 +154,15 @@ function renderOverview(panel, s) {
 function renderSettings(panel, s) {
   const form = mk('form', {className: 'settings-form'});
   const field = (title, props) => { const input = mk('input', props); form.append(mk('label', {textContent: title}, input)); return input; };
+  const editable = s.canEditSettings;
   let image = null;
-  if (s.canEditImage) image = field('Image', {value: s.image, required: true, maxLength: 255, spellcheck: false, autocomplete: 'off'});
+  if (editable && s.imageOptions.length > 1) {
+    image = mk('select', {}, ...s.imageOptions.map(i => mk('option', {value: i, textContent: i === s.image ? `${i} (current)` : i}))); image.value = s.image;
+    form.append(mk('label', {textContent: 'Image'}, image));
+  } else {
+    field('Image', {value: s.image, readOnly: true});
+    if (editable) form.append(mk('p', {className: 'muted', textContent: 'To offer other images, add them to ALLOWED_IMAGES in the management service environment.'}));
+  }
   const grid = mk('div', {className: 'settings'}); form.append(grid);
   const g = (title, props) => { const input = mk('input', props); grid.append(mk('label', {textContent: title}, input)); return input; };
   const replicas = g('Replicas (0 = archived)', {type: 'number', min: s.kind === 'control' ? 1 : 0, max: 100, step: 1, value: s.replicas, required: true});
@@ -163,8 +170,12 @@ function renderSettings(panel, s) {
   const memory = g('Memory MB (0 = unlimited)', {type: 'number', min: 0, max: 1048576, step: 'any', value: s.memoryMB, required: true});
   const restart = mk('select', {}, ...[['any', 'Always'], ['on-failure', 'On failure'], ['none', 'Never']].map(([v, t]) => mk('option', {value: v, textContent: t}))); restart.value = s.restart;
   grid.append(mk('label', {textContent: 'Restart policy'}, restart));
-  form.append(mk('p', {className: 'muted', textContent: s.kind === 'control' ? 'Changes restart the management service. Keep at least one replica.' : 'Saving redeploys the service with the current environment and secrets. Zero replicas archives it.'}),
+  if (editable) form.append(mk('p', {className: 'muted', textContent: s.kind === 'control' ? 'Changes restart the management service. Keep at least one replica.' : 'Saving redeploys the service with the current environment and secrets. Zero replicas archives it.'}),
     mk('button', {type: 'submit', textContent: 'Save & redeploy'}));
+  else {
+    for (const el of [replicas, cpus, memory, restart]) el.disabled = true;
+    form.prepend(mk('p', {className: 'notice', textContent: 'Read only. Replicas, CPU and memory limits, restart policy and image are managed by your administrator.'}));
+  }
   if (s.constraints.length || Object.keys(s.labels).length) form.append(mk('details', {}, mk('summary', {textContent: 'Labels and constraints (read-only)'}),
     mk('table', {}, mk('tbody', {}, ...s.constraints.map(c => mk('tr', {}, mk('th', {textContent: 'constraint'}), mk('td', {textContent: c}))), ...Object.entries(s.labels).map(([k, v]) => mk('tr', {}, mk('th', {textContent: k}), mk('td', {textContent: v})))))));
   form.onsubmit = e => { e.preventDefault(); run(async () => {
@@ -356,16 +367,30 @@ async function renderSecrets(panel, s) {
 }
 
 // ---------- Logs ----------
+// Auto-refresh only runs while the Logs tab is open and the browser tab is visible.
 function stopLogs() { if (state.logsTimer) clearInterval(state.logsTimer); state.logsTimer = null; }
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopLogs(); else state.resumeLogs?.(); });
 function renderLogs(panel, s) {
   const pre = panel.querySelector('.logs'), tail = panel.querySelector('.tail'), follow = panel.querySelector('.follow'), load = panel.querySelector('.load-logs');
+  const status = mk('span', {className: 'muted log-status'}); load.after(status);
   async function fetchLogs() {
     load.disabled = true;
-    try { const r = await api(`/services/${encodeURIComponent(s.id)}/logs?tail=${tail.value}`); pre.textContent = r.lines.length ? r.lines.join('\n') : '(no log output)'; pre.scrollTop = pre.scrollHeight; }
-    finally { load.disabled = false; }
+    try {
+      const r = await api(`/services/${encodeURIComponent(s.id)}/logs?tail=${tail.value}`);
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+      pre.textContent = r.lines.length ? r.lines.join('\n') : '(no log output)';
+      if (atBottom || !state.logsTimer) pre.scrollTop = pre.scrollHeight;
+      status.textContent = `Updated ${new Date().toLocaleTimeString()}${follow.checked ? ' · refreshing every 10 s' : ''}`;
+    } finally { load.disabled = false; }
+  }
+  function start() {
+    stopLogs();
+    if (!follow.checked || document.hidden) return;
+    run(fetchLogs); state.logsTimer = setInterval(() => run(fetchLogs), 10000);
   }
   load.onclick = () => run(fetchLogs);
-  follow.onchange = () => { stopLogs(); if (follow.checked) { run(fetchLogs); state.logsTimer = setInterval(() => run(fetchLogs), 10000); } };
+  follow.onchange = () => { if (follow.checked) start(); else { stopLogs(); status.textContent = status.textContent.replace(' · refreshing every 10 s', ''); } };
+  return {start};
 }
 
 // ---------- Admin: Swarm ----------
@@ -417,7 +442,9 @@ function renderCreate(content) {
   const form = mk('form'); const grid = mk('div', {className: 'settings'});
   const f = (title, props, parent = grid) => { const input = mk('input', props); parent.append(mk('label', {textContent: title}, input)); return input; };
   const project = f('Project ID (service becomes <id>_faas)', {required: true, pattern: '[a-z0-9][a-z0-9-]{1,40}', placeholder: 'demo123', spellcheck: false});
-  const image = f('Image', {value: d.image || 'joshuamshana/bfastfunction:latest', required: true, spellcheck: false});
+  const images = d.images?.length ? d.images : [d.image || 'joshuamshana/bfastfunction:latest'];
+  const image = mk('select', {}, ...images.map(i => mk('option', {value: i, textContent: i}))); image.value = d.image && images.includes(d.image) ? d.image : images[0];
+  grid.append(mk('label', {textContent: 'Image (from ALLOWED_IMAGES)'}, image));
   const mode = mk('select', {}, ...['git', 'npm', 'url'].map(v => mk('option', {value: v, textContent: v}))); grid.append(mk('label', {textContent: 'MODE'}, mode));
   const source = f('GIT_CLONE_URL / NPM_TAR / URL_TAR', {placeholder: 'https://github.com/acme/functions.git', spellcheck: false});
   const gitUser = f('GIT_USERNAME (private repos)', {autocomplete: 'off'}); const gitToken = f('GIT_TOKEN (private repos)', {type: 'password', autocomplete: 'off'});
@@ -438,7 +465,7 @@ function renderCreate(content) {
     const env = [...envs.children].map(r => r.env()), key = {git: 'GIT_CLONE_URL', npm: 'NPM_TAR', url: 'URL_TAR'}[mode.value];
     env.push(`MODE=${mode.value}`); if (source.value.trim()) env.push(`${key}=${source.value.trim()}`);
     if (gitUser.value.trim()) env.push(`GIT_USERNAME=${gitUser.value.trim()}`); if (gitToken.value) env.push(`GIT_TOKEN=${gitToken.value}`);
-    const body = {project: project.value.trim(), image: image.value.trim(), env, replicas: Number(replicas.value), cpus: Number(cpus.value), memoryMB: Number(memory.value), restart: restart.value, sticky: sticky.checked,
+    const body = {project: project.value.trim(), image: image.value, env, replicas: Number(replicas.value), cpus: Number(cpus.value), memoryMB: Number(memory.value), restart: restart.value, sticky: sticky.checked,
       hosts: hosts.value.split(',').map(h => h.trim().toLowerCase()).filter(Boolean), users: users.value.split(',').map(u => u.trim()).filter(Boolean)};
     if (!confirm(`Create ${body.project}_faas with ${body.replicas} replica(s)?`)) return;
     const r = await api('/services', body); message(`${r.message} Hostnames: ${r.hosts.join(', ')}.${r.warnings?.length ? ' ' + r.warnings.join(' ') : ''}`);

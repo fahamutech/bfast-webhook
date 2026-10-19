@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {dockerRequest, demuxLogs, filters, fail} from './docker.mjs';
 import {createFirebaseVerifier, createSessions, parseAccess, serializeUsers, usersInput, normalizeEmail} from './auth.mjs';
-import {classify, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv} from './services.mjs';
+import {classify, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv, parseImages} from './services.mjs';
 import {secretReference, secretChoices, newSecret, secretAttachments} from './secrets.mjs';
 import {serviceWebhookSecret, webhookGeneration, generationLabel, pausedLabel, repositoryFromCloneUrl, createDeliveryLog} from './webhook.mjs';
 
@@ -13,7 +13,7 @@ const asset = file => readFileSync(new URL(`./admin/${file}`, import.meta.url), 
 
 export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], verifyIdToken, firebaseConfig = defaultFirebaseConfig,
   adminEmails = '', serviceUsers = '', selfName = 'webhook', cluster = '', hostDomain = '',
-  defaultImage = 'joshuamshana/bfastfunction:latest', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
+  defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
   now = () => Date.now()} = {}) {
   if (!jwtSecret || jwtSecret.length < 32) throw new Error('ADMIN_JWT_SECRET_FILE must hold a 32+ character signing key');
   if (!origin || new URL(origin).origin !== origin || !origin.startsWith('https://')) throw new Error('ADMIN_ORIGIN must be an exact HTTPS origin');
@@ -23,7 +23,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   const authHost = `https://${firebaseConfig.authDomain}`, originHost = new URL(origin).host;
   const headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
     'Content-Security-Policy': `default-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self'; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com ${authHost}; frame-src ${authHost} https://accounts.google.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`};
-  let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null};
+  let attempts = [], mutation = false, accessCache = {at: 0, access: null, self: null, images: []};
   const options = () => ({excluded, selfName});
 
   // Access policy lives in this service's own environment; read it live so user changes apply before the restart lands.
@@ -34,10 +34,11 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       const matches = await docker('GET', `/services?filters=${filters({name: [selfName]})}`);
       self = matches.find(s => s.Spec?.Name === selfName) || null;
     } catch { self = null; }
-    if (self) { const e = envMap(self.Spec.TaskTemplate.ContainerSpec.Env); access = parseAccess(e.ADMIN_EMAILS ?? adminEmails, e.SERVICE_USERS ?? ''); }
+    let images = parseImages(allowedImages);
+    if (self) { const e = envMap(self.Spec.TaskTemplate.ContainerSpec.Env); access = parseAccess(e.ADMIN_EMAILS ?? adminEmails, e.SERVICE_USERS ?? ''); if (e.ALLOWED_IMAGES !== undefined) images = parseImages(e.ALLOWED_IMAGES); }
     else access = parseAccess(adminEmails, serviceUsers);
     if (!access.admins.size) access = parseAccess(adminEmails, serviceUsers);
-    accessCache = {at: now(), access, self};
+    accessCache = {at: now(), access, self, images};
     return accessCache;
   }
   const roleOf = (access, email) => access.admins.has(email) ? 'admin' : access.users.has(email) ? 'user' : null;
@@ -55,11 +56,11 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       if (!publicRoute) {
         const claims = await sessions.verify(req.headers.cookie);
         if (write && req.headers['x-csrf-token'] !== claims.csrf) throw fail(403, 'Invalid request token');
-        const {access} = await loadAccess();
+        const {access, images} = await loadAccess();
         const role = roleOf(access, claims.email);
         if (!role) throw fail(401, 'Your access was removed. Sign in again.');
         if (admin && role !== 'admin') throw fail(403, 'Administrator access required');
-        user = {email: claims.email, name: claims.name, picture: claims.picture, role, claims, access};
+        user = {email: claims.email, name: claims.name, picture: claims.picture, role, claims, access, images};
       }
       await action(req, res, user);
     } catch (error) {
@@ -125,7 +126,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       res.setHeader('Set-Cookie', sessions.cookie(token, sessions.ttl));
       res.json({csrf, user: {email: account.email, name: account.name, picture: account.picture, role}});
     }, {publicRoute: true, write: true}),
-    session: wrap(async (_, res, u) => res.json({csrf: u.claims.csrf, user: {email: u.email, name: u.name, picture: u.picture, role: u.role}, defaults: {cluster, hostDomain, image: defaultImage}})),
+    session: wrap(async (_, res, u) => res.json({csrf: u.claims.csrf, user: {email: u.email, name: u.name, picture: u.picture, role: u.role}, defaults: {cluster, hostDomain, image: u.images.length && !u.images.includes(defaultImage) ? u.images[0] : defaultImage, images: u.role === 'admin' ? (u.images.length ? u.images : [defaultImage]) : []}})),
     logout: wrap(async (_, res, u) => { sessions.revoke(u.claims); res.setHeader('Set-Cookie', sessions.cookie('', 0)); res.json({ok: true}); }, {write: true}),
 
     list: wrap(async (_, res, u) => {
@@ -138,7 +139,9 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       const service = await inspect(req.params.service, u);
       const [tasks, nodes] = await Promise.all([tasksFor([service.ID]), nodeNames()]);
       const summary = serviceSummary(service, tasks.filter(t => t.DesiredState === 'running'), service.kind);
-      res.json({...serviceDetail(service), ...summary, kind: service.kind, canEditImage: u.role === 'admin',
+      const current = service.Spec.TaskTemplate.ContainerSpec.Image;
+      res.json({...serviceDetail(service), ...summary, kind: service.kind, canEditSettings: u.role === 'admin',
+        imageOptions: u.role === 'admin' ? [...new Set([current, ...u.images])] : [],
         users: u.role === 'admin' ? [...u.access.users.entries()].filter(([, s]) => s.has(service.Spec.Name)).map(([email]) => email) : undefined,
         secrets: (service.Spec.TaskTemplate.ContainerSpec.Secrets || []).map(secretReference),
         tasks: tasks.map(t => taskSummary(t, nodes)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 25)});
@@ -159,6 +162,16 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       if ((JSON.stringify(req.body) || '').length > 1048576) throw fail(413, 'Settings too large');
       const service = await inspect(req.params.service, u);
       const spec = updatedSpec(service, req.body, {allowImage: u.role === 'admin'});
+      // Resource allocation and images are administrator decisions; users may only resend the current values.
+      if (u.role !== 'admin') {
+        const now = serviceDetail(service);
+        if (['replicas', 'cpus', 'memoryMB', 'restart'].some(k => req.body[k] !== now[k])) throw fail(403, 'Only administrators can change replicas, limits or the restart policy');
+      }
+      const image = req.body.image;
+      if (image !== undefined && image !== service.Spec.TaskTemplate.ContainerSpec.Image) {
+        if (!u.images.length) throw fail(400, 'Image changes are disabled. Add images to ALLOWED_IMAGES on the management service.');
+        if (!u.images.includes(image)) throw fail(400, 'Choose an image from ALLOWED_IMAGES');
+      }
       if (service.kind === 'control') {
         if (req.body.secrets !== undefined) throw fail(400, 'Secrets of the management service cannot be edited here');
         if (spec.Mode.Replicated.Replicas < 1) throw fail(400, 'The management service must keep at least one replica');
@@ -218,7 +231,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     create: wrap(locked(async (req, res, u) => {
       if ((JSON.stringify(req.body) || '').length > 1048576) throw fail(413, 'Settings too large');
       const {users, ...input} = req.body || {};
-      const spec = newServiceSpec(input, {cluster, hostDomain, defaultImage});
+      const spec = newServiceSpec(input, {cluster, hostDomain, defaultImage, images: u.images});
       if (classify({Spec: spec}, options()) !== 'app') throw fail(400, 'That name is reserved for infrastructure');
       const existing = await docker('GET', `/services?filters=${filters({name: [spec.Name]})}`);
       if (existing.some(s => s.Spec?.Name === spec.Name)) throw fail(409, `${spec.Name} already exists`);
@@ -280,7 +293,7 @@ export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
   }
   return createAdmin({jwtSecret: readFileSync(env.ADMIN_JWT_SECRET_FILE, 'utf8').trim(), origin: env.ADMIN_ORIGIN, firebaseConfig,
     adminEmails: env.ADMIN_EMAILS, serviceUsers: env.SERVICE_USERS || '', selfName: env.SELF_SERVICE_NAME || 'webhook',
-    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest',
+    cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '',
     webhookSecret: env.WEBHOOK_SECRET_FILE ? readFileSync(env.WEBHOOK_SECRET_FILE, 'utf8').trim() : '', acceptSharedSecret: env.WEBHOOK_ACCEPT_SHARED_SECRET !== 'false', deliveryLog,
     excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean)});
 }

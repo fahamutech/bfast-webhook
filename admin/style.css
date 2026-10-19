@@ -79,3 +79,5 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat b{font-size:16px}
   .settings{grid-template-columns:minmax(0,1fr)}
 }
+
+.notice{padding:12px 14px;background:#eef3fb;border:1px solid #cfdcf0;color:#2d4a6d;border-radius:8px;font-size:14px}input:disabled,select:disabled,input[readonly]{background:#f3f5f2;color:#56615c;cursor:not-allowed}.log-status{margin-left:auto}

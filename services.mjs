@@ -79,7 +79,7 @@ export function checkEnv(list) {
   }
   return list;
 }
-const validImage = value => typeof value === 'string' && value.length <= 255 && /^[a-z0-9][a-z0-9._\/-]*(?::[\w.-]{1,128})?(?:@sha256:[a-f0-9]{64})?$/i.test(value) && !/\s/.test(value);
+export const validImage = value => typeof value === 'string' && value.length <= 255 && /^[a-z0-9][a-z0-9._\/-]*(?::[\w.-]{1,128})?(?:@sha256:[a-f0-9]{64})?$/i.test(value) && !/\s/.test(value);
 export function checkDeployment(input) {
   if (!Number.isInteger(input.replicas) || input.replicas < 0 || input.replicas > 100
     || !Number.isFinite(input.cpus) || input.cpus < 0 || input.cpus > 128
@@ -125,12 +125,16 @@ export function actionSpec(service, action) {
 
 const validProject = value => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{1,40}$/.test(value);
 const validHost = value => typeof value === 'string' && value.length <= 253 && /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(value);
-export function newServiceSpec(input, {cluster, hostDomain, defaultImage, network = 'bfastweb'}) {
+// ALLOWED_IMAGES=img:a,img:b — comma or whitespace separated, invalid entries ignored.
+export const parseImages = value => [...new Set(String(value || '').split(/[\s,]+/).map(s => s.trim()).filter(validImage))];
+
+export function newServiceSpec(input, {cluster, hostDomain, defaultImage, images = [], network = 'bfastweb'}) {
   const allowed = ['project', 'image', 'env', 'replicas', 'cpus', 'memoryMB', 'restart', 'hosts', 'sticky'];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed.includes(k))) throw fail(400, 'Unsupported service settings');
   if (!validProject(input.project)) throw fail(400, 'Project ID must be 2–41 lowercase letters, numbers or dashes');
   const image = input.image === undefined || input.image === '' ? defaultImage : input.image;
   if (!validImage(image)) throw fail(400, 'Invalid image reference');
+  if (images.length ? !images.includes(image) : image !== defaultImage) throw fail(400, images.length ? 'Choose an image from ALLOWED_IMAGES' : `Only ${defaultImage} is allowed. Add images to ALLOWED_IMAGES on the management service to offer more.`);
   checkDeployment(input);
   const project = input.project, name = `${project}_faas`, router = `${project}-faas`;
   const defaults = cluster && hostDomain ? [`${router}.${cluster}.${hostDomain}`, `${project}.api.${hostDomain}`] : [];

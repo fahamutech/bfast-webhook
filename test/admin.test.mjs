@@ -96,11 +96,16 @@ test('admins see application services plus the management service; users only th
   assert.equal((await s.send('/swarm')).status,403);
   assert.equal((await s.send('/users')).status,403);
   assert.equal((await s.send('/services',{project:'x'})).status,403);
-  const detail=await s.send('/services/abc123'); assert.equal(detail.status,200); assert.equal(detail.data.canEditImage,false); assert.equal(detail.data.users,undefined);
+  const detail=await s.send('/services/abc123'); assert.equal(detail.status,200); assert.equal(detail.data.canEditSettings,false); assert.deepEqual(detail.data.imageOptions,[]); assert.equal(detail.data.users,undefined);
   assert.equal(detail.data.tasks[0].node,'manager-1'); assert.equal(detail.data.tasks[1].error,'boom');
 });
-test('updates env and settings while preserving unrelated spec and enforcing version; image only for admins',async t => {
-  const s=await setup(t); await s.login();
+test('updates env and settings while preserving unrelated spec and enforcing version; images come from ALLOWED_IMAGES',async t => {
+  const s=await setup(t);
+  s.services[2].Spec.TaskTemplate.ContainerSpec.Env.push('ALLOWED_IMAGES=joshuamshana/bfastfunction:latest, joshuamshana/bfastfunction:3.2.4 -bad, :x');
+  await s.login();
+  const detail=(await s.send('/services/abc123')).data; assert.equal(detail.canEditSettings,true);
+  assert.deepEqual(detail.imageOptions,['example:latest','joshuamshana/bfastfunction:latest','joshuamshana/bfastfunction:3.2.4']);
+  assert.equal((await s.send('/services/abc123',{...input(service),image:'joshuamshana/other:1'})).status,400);
   const body={...input(service),env:['A=new=value','MULTI=line1\nline2','PROJECT_ID=example'],replicas:2};
   assert.equal((await s.send('/services/abc123',{...body,version:6})).status,409);
   assert.equal((await s.send('/services/abc123',{...body,Mounts:[]})).status,400);
@@ -112,7 +117,18 @@ test('updates env and settings while preserving unrelated spec and enforcing ver
   assert.deepEqual(update.body.TaskTemplate.Networks,service.Spec.TaskTemplate.Networks); assert.equal(update.body.Mode.Replicated.Replicas,2);
   s.reset(); await s.login('devtoken');
   assert.equal((await s.send('/services/abc123',{...body,version:8,image:'x:1'})).status,400);
-  assert.equal((await s.send('/services/abc123',{...body,version:8})).status,200);
+  // Users may edit env but must resend the current resource settings unchanged.
+  for (const patch of [{replicas:3},{cpus:1},{memoryMB:512},{restart:'none'}]) assert.equal((await s.send('/services/abc123',{...body,version:8,...patch})).status,403);
+  assert.equal((await s.send('/services/abc123',{...body,version:8,env:['A=user']})).status,200);
+  assert.equal(s.services[0].Spec.Mode.Replicated.Replicas,2);
+});
+test('image changes are disabled without ALLOWED_IMAGES; new services use the default image',async t => {
+  const s=await setup(t); await s.login();
+  const r=await s.send('/services/abc123',{...input(service),image:'joshuamshana/bfastfunction:3.2.4'}); assert.equal(r.status,400); assert.match(r.data.error,/ALLOWED_IMAGES/);
+  assert.equal((await s.send('/services/abc123',{...input(service),image:'example:latest'})).status,200);
+  assert.equal((await s.send('/services',{project:'demo',image:'evil/miner:1',replicas:0,cpus:0,memoryMB:0,restart:'any'})).status,400);
+  assert.equal((await s.send('/services',{project:'demo',replicas:0,cpus:0,memoryMB:0,restart:'any'})).status,201);
+  assert.deepEqual((await s.send('/session')).data.defaults.images,['joshuamshana/bfastfunction:latest']);
 });
 test('management service edits keep it alive and keep the current admin',async t => {
   const s=await setup(t); await s.login();

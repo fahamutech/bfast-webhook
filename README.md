@@ -148,6 +148,7 @@ cookie. No service account is required. To use another Firebase project set
 | `SERVICE_USERS` | managed | `user@gmail.com:svc_a,svc_b;other@gmail.com:svc_b` — per-user service access. Edited from the **Users & access** page; you rarely set it by hand |
 | `SWARM_CLUSTER`, `SWARM_HOST_DOMAIN` | recommended | Default hostnames for new services: `<project>-faas.<cluster>.<domain>` and `<project>.api.<domain>` |
 | `DEFAULT_IMAGE` | no | Image offered when creating services (default `joshuamshana/bfastfunction:latest`) |
+| `ALLOWED_IMAGES` | no | Comma-separated images administrators may pick for new or existing services, e.g. `joshuamshana/bfastfunction:latest,joshuamshana/bfastfunction:3.2.4`. Read live from the management service's environment. When unset, images are read-only and new services use `DEFAULT_IMAGE` |
 | `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
@@ -165,8 +166,10 @@ console with HTTP 503 without affecting the GitHub webhook.
 images, view Swarm nodes and all services, and assign users.
 
 **Users** (`SERVICE_USERS`) sign in with Google and see only the services assigned
-to them. They can edit environment variables and secrets, change replicas and
-limits, archive, unarchive, restart, and read tasks and logs for those services.
+to them. They can edit environment variables and secrets, archive, unarchive and
+restart, and read tasks and logs for those services. Their **Settings** tab is read
+only: replicas, CPU and memory limits, restart policy and image can only be changed
+by administrators, and the API rejects such changes from users.
 
 Infrastructure is **protected** and read-only for everyone: global services,
 services with bind mounts or manager-only constraints, names containing
@@ -209,7 +212,8 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
   under `/run/secrets/<name>`, and point an environment variable at that path; the
   BFast runtime loads the file contents at startup. Values are write-only.
 - **Logs**: last 100–1000 lines via the Docker service logs API, on demand or
-  auto-refreshed every 10 s. Nothing streams continuously.
+  auto-refreshed every 10 s. Auto-refresh pauses when you switch to another tab or
+  the browser tab is hidden, and resumes when you come back. Nothing streams continuously.
 - **Swarm status** (admins): node roles, availability, resources, engine
   versions, and every service with running/desired counts.
 - **Delete**: not available in the console by design. Archive instead, and use
