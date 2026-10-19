@@ -1,31 +1,30 @@
 # bfast-webhook
 
-GitHub push webhook for BFast Cloud. Deploy this public repository as a FaaS
-service named `webhook`. The target service name comes from the webhook URL:
-`/github-webhook/<service>`. After verifying a signed default-branch push, the
-handler reads that service's `GIT_CLONE_URL` from Docker. It restarts the service
-only when the URL matches the repository in GitHub's signed payload.
-No repository-to-service target list is required.
+GitHub push webhook **and** Docker Swarm service manager for BFast Cloud. Deploy
+this public repository as a FaaS service named `webhook` on a Swarm manager.
+
+- `POST /github-webhook/<service>` restarts a service after a signed default-branch
+  push whose repository matches that service's `GIT_CLONE_URL`.
+- `GET /admin` is a web console where people sign in with Google (Firebase
+  Authentication, project `bfastapp`) and manage the services assigned to them:
+  view, create, archive (scale to 0), unarchive (scale to 1), restart, environment
+  variables, Docker secrets, recent tasks, logs, Swarm status and user access.
 
 ## Runtime
 
-`functions/index.mjs` exports the BFast function descriptor, served directly by
-the normal runtime. Use a `bfastfunction` image with `BFAST_RAW_BODY` support and
-enable it so the handler can verify GitHub's signature against the original JSON
-bytes. The standard health and function discovery endpoints remain available.
+`functions/index.mjs` exports BFast function descriptors served by the standard
+`joshuamshana/bfastfunction` runtime. Enable `BFAST_RAW_BODY=true` so the webhook
+can verify GitHub's signature against the original JSON bytes. The runtime clones
+this repository on startup and installs `dependencies` (`jose`).
 
 ## Create the Swarm service
 
-Create a random secret in a file outside this public repository, then add it as
-a Docker secret using the same value entered in GitHub's webhook settings:
-
 ```bash
+# GitHub webhook secret (same value entered in GitHub's webhook settings)
 docker secret create github_webhook_secret /secure/path/github-webhook-secret
-```
+# Session signing key for the console
+openssl rand -hex 32 | docker secret create bfast_admin_jwt -
 
-Run this on a Swarm manager after the repository is public:
-
-```bash
 docker service create \
   --name webhook \
   --replicas 1 \
@@ -34,11 +33,17 @@ docker service create \
   --network bfastweb \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
   --secret github_webhook_secret \
+  --secret bfast_admin_jwt \
   --env MODE=git \
   --env GIT_CLONE_URL=https://github.com/fahamutech/bfast-webhook.git \
   --env BFAST_RAW_BODY=true \
   --env BFAST_BODY_LIMIT=25mb \
   --env WEBHOOK_SECRET_FILE=/run/secrets/github_webhook_secret \
+  --env ADMIN_JWT_SECRET_FILE=/run/secrets/bfast_admin_jwt \
+  --env ADMIN_ORIGIN=https://webhook-faas.bfast.<bfast-cloud-host-domain> \
+  --env ADMIN_EMAILS=you@gmail.com \
+  --env SWARM_CLUSTER=bfast \
+  --env SWARM_HOST_DOMAIN=<bfast-cloud-host-domain> \
   --env PORT=3000 \
   --label traefik.enable=true \
   --label traefik.docker.network=bfastweb \
@@ -49,15 +54,36 @@ docker service create \
   joshuamshana/bfastfunction:latest
 ```
 
-The base image includes the Docker CLI. Docker socket access gives the webhook
-service control of the manager, so only trusted maintainers should be able to
-change this service or its GitHub webhook secret.
+Docker socket access gives this service control of the manager. Only trusted
+administrators should be listed in `ADMIN_EMAILS` or be able to change this service.
+
+### Upgrade an existing webhook service
+
+The console no longer uses a shared password. Remove the old settings and add the
+Google-based ones (the service restarts and clones the latest code):
+
+```bash
+openssl rand -hex 32 | docker secret create bfast_admin_jwt - 2>/dev/null || true
+
+docker service update \
+  --secret-add bfast_admin_jwt \
+  --env-rm ADMIN_PASSWORD_FILE \
+  --env-add ADMIN_JWT_SECRET_FILE=/run/secrets/bfast_admin_jwt \
+  --env-add ADMIN_ORIGIN=https://webhook-faas.bfast.<bfast-cloud-host-domain> \
+  --env-add ADMIN_EMAILS=you@gmail.com \
+  --env-add SWARM_CLUSTER=bfast \
+  --env-add SWARM_HOST_DOMAIN=<bfast-cloud-host-domain> \
+  --force webhook
+```
+
+`docker service update --secret-rm bfast_admin_password webhook` can remove the
+old password secret afterwards.
 
 ## GitHub webhook settings
 
 In the *source functions repository*, open Settings → Webhooks → Add webhook:
 
-- Payload URL: `https://webhook-faas.bfast.smartstock.co.tz/github-webhook/example_faas`
+- Payload URL: `https://webhook-faas.bfast.<bfast-cloud-host-domain>/github-webhook/example_faas`
 - Content type: `application/json`
 - Secret: the value in `github_webhook_secret`
 - Events: push only
@@ -65,149 +91,130 @@ In the *source functions repository*, open Settings → Webhooks → Add webhook
 The target service must use `MODE=git` (or omit `MODE`, which defaults to `git`)
 and have `GIT_CLONE_URL` pointing to the sending GitHub repository. HTTP(S)
 GitHub clone URLs are supported, with or without `.git` or a trailing slash;
-repository names are compared without case sensitivity. The receiver reads `repository.default_branch` from
-GitHub's signed payload, so pushes to `main`, `master`, or any other default
-branch name trigger an update automatically. Pushes to other branches and branch
-deletions are ignored. For a `MODE=git` function service, the new task clones the
-repository's default branch on startup.
+repository names are compared without case sensitivity. The receiver reads
+`repository.default_branch` from GitHub's signed payload, so pushes to `main`,
+`master`, or any other default branch trigger an update. Pushes to other branches
+and branch deletions are ignored.
 
-A 403 response now means the URL names a different service, the target is not
-in Git mode, or its `GIT_CLONE_URL` does not match the sending repository. Correct
-the webhook URL or target service configuration, then redeliver the failed event.
-Signature failures return 401. Docker inspection/update failures return 500 and
-do not mark the delivery as completed, so they can be retried.
+A 403 response means the URL names a different service, the target is not in Git
+mode, or its `GIT_CLONE_URL` does not match the sending repository. Signature
+failures return 401. Docker inspection/update failures return 500 and can be retried.
+
+### Firebase Authentication (one-time)
+
+The console signs people in with Google through Firebase project **bfastapp**
+(web app *BFastIDE*, `1:311831913786:web:6be76738b599546b`). In the
+[Firebase console](https://console.firebase.google.com/project/bfastapp/authentication):
+
+1. **Sign-in method** → enable the **Google** provider.
+2. **Settings → Authorized domains** → add the console host, e.g.
+   `webhook-faas.bfast.<bfast-cloud-host-domain>`. Sign-in fails with
+   `auth/unauthorized-domain` until this is done.
+
+The server verifies each Firebase ID token against Google's public keys
+(issuer `https://securetoken.google.com/bfastapp`, audience `bfastapp`), accepts
+only the `google.com` provider with a verified email, then issues its own session
+cookie. No service account is required. To use another Firebase project set
+`FIREBASE_WEB_CONFIG` to its web config JSON (`projectId`, `apiKey`, `authDomain`,
+`appId`).
+
+## Configuration
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `WEBHOOK_SECRET_FILE` | yes | GitHub webhook secret file |
+| `ADMIN_JWT_SECRET_FILE` | yes | 32+ character session signing key file |
+| `ADMIN_ORIGIN` | yes | Exact HTTPS origin of the console, no trailing slash |
+| `ADMIN_EMAILS` | yes | Comma-separated Google accounts with full administration |
+| `SERVICE_USERS` | managed | `user@gmail.com:svc_a,svc_b;other@gmail.com:svc_b` — per-user service access. Edited from the **Users & access** page; you rarely set it by hand |
+| `SWARM_CLUSTER`, `SWARM_HOST_DOMAIN` | recommended | Default hostnames for new services: `<project>-faas.<cluster>.<domain>` and `<project>.api.<domain>` |
+| `DEFAULT_IMAGE` | no | Image offered when creating services (default `joshuamshana/bfastfunction:latest`) |
+| `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
+| `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
+| `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
+
+Missing `ADMIN_JWT_SECRET_FILE`, `ADMIN_ORIGIN` or `ADMIN_EMAILS` disables the
+console with HTTP 503 without affecting the GitHub webhook.
+
+## Roles
+
+**Administrators** (`ADMIN_EMAILS`) see every application service plus the
+`webhook` management service itself. They can create services, change
+images, view Swarm nodes and all services, and assign users.
+
+**Users** (`SERVICE_USERS`) sign in with Google and see only the services assigned
+to them. They can edit environment variables and secrets, change replicas and
+limits, archive, unarchive, restart, and read tasks and logs for those services.
+
+Infrastructure is **protected** and read-only for everyone: global services,
+services with bind mounts or manager-only constraints, names containing
+`webhook`, `traefik`, `bfast` or `control` components, `bfast.app=bfast`,
+`bfast.control=true`, `PROJECT_ID=_BFAST_ADMIN`, and `ADMIN_EXCLUDED_SERVICES`.
+Add `bfast.control=true` to any other infrastructure service before exposing
+the console.
+
+### Managing the management service
+
+Administrators can edit the `webhook` service's environment, image and limits
+and restart it. Guard rails: replicas stay ≥ 1, `WEBHOOK_SECRET_FILE`,
+`ADMIN_JWT_SECRET_FILE` and `ADMIN_ORIGIN` must stay set, `ADMIN_EMAILS` must keep
+the signed-in administrator, archive is refused, and its secrets are not
+editable from the console. Saving users or any change to this service makes
+Swarm restart it; sessions are stateless JWTs, so people stay signed in.
+
+## Day-to-day workflow
+
+- **Create**: *New service*. The console does not run `create_faas.sh`; it builds
+  the same Swarm spec through the Docker API (name and hostname `<project>_faas`,
+  `bfastweb` network, replicated, restart `any` with 5 s delay, Traefik port 3000,
+  TLS with resolver `le`, sticky cookie, both default hostnames, `PROJECT_ID`,
+  `PORT=3000`, `PRODUCTION=1`, extra env, image), plus optional CPU/memory limits,
+  extra hostnames and user assignment. The form asks for project ID, image, `MODE`
+  and source (`GIT_CLONE_URL`, `NPM_TAR` or `URL_TAR`), Git credentials, replicas,
+  limits, extra hostnames and users. Create with 0 replicas to stage it archived.
+- **Archive / Unarchive**: archive scales the service to 0 replicas; unarchive
+  scales it to 1. Configuration, secrets and labels are kept. Raise replicas
+  further from *Settings*.
+- **Restart**: forces a rolling task replacement (same as a webhook deploy).
+- **Environment**: text, file and Base64 values; removing a row deletes the
+  variable. Saving redeploys.
+- **Secrets**: create versioned Swarm secrets scoped to the service, attach them
+  under `/run/secrets/<name>`, and point an environment variable at that path; the
+  BFast runtime loads the file contents at startup. Values are write-only.
+- **Logs**: last 100–1000 lines via the Docker service logs API, on demand or
+  auto-refreshed every 10 s. Nothing streams continuously.
+- **Swarm status** (admins): node roles, availability, resources, engine
+  versions, and every service with running/desired counts.
+- **Delete**: not available in the console by design. Archive instead, and use
+  `docker service rm` on the manager if a service must really be removed.
+
+## Routes
+
+| Method | Path | Who | Purpose |
+| --- | --- | --- | --- |
+| GET | `/admin`, `/admin/app.js`, `/admin/style.css`, `/admin/api/config` | public | Console and Firebase web config |
+| POST | `/admin/api/login` | public | `{ "idToken": "<Firebase ID token>" }` → session cookie + CSRF token |
+| GET | `/admin/api/session` | signed in | Current user, role and CSRF token |
+| POST | `/admin/api/logout` | signed in | Revoke session |
+| GET | `/admin/api/services` | signed in | Visible services with status, replicas, hosts |
+| POST | `/admin/api/services` | admin | Create a service |
+| GET | `/admin/api/services/:service` | signed in | Detail, environment, secrets metadata, recent tasks |
+| POST | `/admin/api/services/:service` | signed in | Update `version`, `env`, `replicas`, `cpus`, `memoryMB`, `restart`, optional `secrets`, admin-only `image` |
+| POST | `/admin/api/services/:service/actions` | signed in | `{ "action": "archive" \| "unarchive" \| "restart" }` |
+| GET | `/admin/api/services/:service/tasks` | signed in | Recent tasks |
+| GET | `/admin/api/services/:service/logs?tail=200` | signed in | Last lines (10–1000) |
+| GET/POST | `/admin/api/services/:service/secrets` | signed in | List / create secrets |
+| GET | `/admin/api/swarm` | admin | Swarm info, nodes, all services |
+| GET/POST | `/admin/api/users` | admin | Read / replace `SERVICE_USERS` |
+
+Writes require `Origin: <ADMIN_ORIGIN>`, `Content-Type: application/json` and
+`X-CSRF-Token`. Updates must send the `version` returned by GET; HTTP 409 means
+the service changed and must be reloaded. Sessions last 8 hours in
+Secure/HttpOnly/SameSite=Strict cookies, responses are `no-store`, and the CSP
+only allows Google/Firebase sign-in endpoints. Sign-in attempts are limited to 30
+per minute per replica. Run one replica.
 
 ## Tests
 
-Run `npm test`. Tests use mocked Docker inspection and restart operations.
-
-## Service manager
-
-Open `https://<webhook-host>/admin` to sign in with one shared password, select an
-application service, edit its environment, replicas, CPU/memory limits and restart
-policy, then **Save & redeploy**. Image, networks, host mounts, labels and other
-settings are preserved. Secret attachments have their own editor. Environment values are hidden until revealed; blank values
-are supported, and removing a row removes that variable on save. Multiline values
-are preserved. Zero replicas stops a service; zero CPU/memory limits means unlimited.
-An accepted update means Swarm has started reconciliation, not that the deployment
-has become healthy. Check service tasks/logs after deployment.
-
-### Enable on an existing webhook service
-
-Create two independent secrets on the Swarm manager. Put a strong shared password
-(at least 16 characters) into `/secure/path/admin-password` without committing it or
-putting it in shell history. Create a random JWT signing key separately:
-
-```bash
-openssl rand -hex 32 | docker secret create bfast_admin_jwt -
-docker secret create bfast_admin_password /secure/path/admin-password
-
-docker service update \
-  --replicas 1 \
-  --secret-add bfast_admin_password \
-  --secret-add bfast_admin_jwt \
-  --env-add ADMIN_PASSWORD_FILE=/run/secrets/bfast_admin_password \
-  --env-add ADMIN_JWT_SECRET_FILE=/run/secrets/bfast_admin_jwt \
-  --env-add ADMIN_ORIGIN=https://webhook-faas.bfast.smartstock.co.tz \
-  --env-add ADMIN_EXCLUDED_SERVICES=webhook \
-  --force webhook
-```
-
-Deploy this code and install its dependencies before enabling the routes. Existing
-Git-mode services fetch the published repository on startup. `ADMIN_ORIGIN` must
-match the browser's exact HTTPS origin, without a trailing slash or path. HTTPS is
-required; TLS can terminate at Traefik. Missing configuration disables the manager
-with HTTP 503 without disabling the GitHub webhook. Invalid configured secrets or
-origin fail startup. Secret files are trimmed, so avoid leading/trailing whitespace.
-
-Only replicated application services are shown. The server blocks both listing and
-direct access to names containing the `webhook`, `traefik`, `bfast`, or `control`
-underscore-delimited components, `bfast.app=bfast`, `bfast.control=true`,
-`PROJECT_ID=_BFAST_ADMIN`, services with host bind mounts, manager-only constraints,
-and names in comma-separated `ADMIN_EXCLUDED_SERVICES`. Global services are also
-excluded. Add `bfast.control=true` to any additional infrastructure service before
-exposing this manager. The exclusions cannot be edited through this UI.
-
-The shared password grants administration of all eligible services, including access
-to plaintext environment secrets. Only share it with trusted operators. Sessions last
-30 minutes, with HS256 JWTs in Secure/HttpOnly/SameSite=Strict host-only cookies,
-exact-origin and CSRF checks on writes, no-store responses, and a restrictive CSP.
-Tokens never go into browser local storage. Logout revokes the current session.
-A global limit of 10 login attempts/minute does not trust forwarded IP headers.
-Sessions and limits are held in memory: **run one replica**; restarting the manager
-revokes every session. To rotate credentials, attach replacement Docker secrets,
-update the secret file paths, and restart the manager. Use edge rate limiting as
-well if exposed publicly. Configuration values, passwords and JWTs are not logged.
-
-### Routes
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/admin` | Management page |
-| POST | `/admin/api/login` | `{ "password": "…" }`; sets JWT cookie and returns CSRF token |
-| GET | `/admin/api/session` | Validate session and retrieve CSRF token |
-| POST | `/admin/api/logout` | Revoke session and clear cookie |
-| GET | `/admin/api/services` | Eligible service IDs, names and desired replica counts |
-| GET | `/admin/api/services/:service` | Current environment, image, settings and version |
-| POST | `/admin/api/services/:service` | Save settings and redeploy |
-
-Writes require `Origin: <ADMIN_ORIGIN>`, `Content-Type: application/json`, and,
-except login, `X-CSRF-Token` from the session endpoint. Updates accept
-`version`, `env` (array of `KEY=value` strings), `replicas`, `cpus`, `memoryMB`, and
-`restart` (`any`, `on-failure`, `none`), and optional `secrets` (see below). Use the version returned by GET. The Docker
-update includes this version to prevent concurrent changes from being overwritten;
-HTTP 409 requires reloading the service. Unknown fields and invalid settings are
-rejected. Docker secret contents are never returned by this API.
-
-Security references: [OWASP session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
-and [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
-
-### Application secrets
-
-The service editor includes a **Secrets** section:
-
-1. Expand **Create a secret for this service**, enter a versioned name such as
-   `database-password-v2` and its value, then click **Create secret**. The value is
-   stored immediately in Swarm and cleared from the input. It cannot be read back.
-2. Select the new secret and click **Attach secret**. Set the filename, numeric
-   owner UID/group GID, and read permissions (0400, 0440 or 0444). New attachments
-   default to root ownership and 0400; use your application's UID if it runs as a
-   non-root user.
-3. With a BFast Functions runtime that supports secret hydration, use the displayed
-   `/run/secrets/<filename>` path directly as the sensitive environment variable,
-   for example `DATABASE_PASSWORD=/run/secrets/database-password`. BFast replaces
-   the path with the file contents before loading the function project. Variables
-   ending in `_FILE` deliberately keep the path for libraries that implement their
-   own file-based configuration. Other runtimes must read the secret file themselves.
-4. Click **Save & redeploy** to apply attachments and environment changes together.
-
-Names are prefixed with `app-<service-ID>-` and secrets are labelled as owned by
-that service. Only secrets owned by the selected service, or already attached to
-it, are selectable; secrets attached to protected infrastructure are excluded even
-if their ownership label matches. New values are limited to 64 KiB of UTF-8 text.
-The value is neither returned by the API nor logged. Creation does not attach the
-secret or restart the service. If you close the editor, the unattached secret is
-still available the next time you open that service.
-
-Docker secret values are immutable: create a new version, detach the old one, and
-attach the replacement under the same filename in a single save. **Detach on save**
-removes access from that service; it does not delete the Swarm secret. Global secret
-deletion and rotation of the webhook's own login/signing secrets are not exposed.
-The initial admin secrets must still be provisioned on the manager before login.
-See [Docker's secret documentation](https://docs.docker.com/engine/swarm/secrets/).
-
-Additional authenticated routes:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/admin/api/services/:service/secrets` | Selectable secret IDs and names, never values |
-| POST | `/admin/api/services/:service/secrets` | Create from `{ "name": "db-v2", "value": "…" }` |
-
-Service detail now includes `secrets` metadata. Service updates optionally accept
-`secrets: [{ "id": "…", "target": "db-password", "uid": "1000", "gid": "1000", "mode": 256 }]`.
-`mode` is a JSON number (256 = octal 0400, 288 = 0440, 292 = 0444).
-Omitting `secrets` preserves existing attachments; an empty array detaches all.
-The server resolves source names from Docker, validates ownership and mount paths,
-and rejects duplicate IDs/filenames. Creation and attachment updates use the same
-JWT, exact-origin and CSRF protection as other writes. A duplicate secret name
-returns HTTP 409; choose a new version name.
+`npm test` runs the webhook and console tests against a mocked Docker API and a
+mocked token verifier; no Docker or Google access is needed.
