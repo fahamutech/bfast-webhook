@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{TITLE}} · BFast Cloud Docs</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="theme-color" content="#06120e">
+<link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@300..700&display=swap">
+<link rel="stylesheet" href="/site/site.css">
+<script src="/site/site.js" defer></script>
+<script src="/site/docs.js" defer></script>
+</head>
+<body class="docs">
+<a class="skip" href="#doc">Skip to content</a>
+<header class="nav scrolled" data-nav>
+  <a class="brand" href="/" aria-label="BFast Cloud home"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="4"><path d="M32 10 51 21v22L32 54 13 43V21z"/></g><circle cx="32" cy="32" r="6" fill="currentColor"/></svg><span>BFast<b>Docs</b></span></a>
+  <nav class="nav-links" id="nav-links" aria-label="Main"><a href="/#how">How it works</a><a href="/#functions">Functions</a><a href="/#pricing">Pricing</a><a href="/docs">Docs</a><a class="m-only" href="{{CONSOLE_URL}}">Sign in</a><a class="m-only" href="{{REGISTER_URL}}">Get early access →</a></nav>
+  <div class="nav-cta"><a class="link" href="{{CONSOLE_URL}}">Sign in</a><a class="btn btn-primary btn-sm" href="{{REGISTER_URL}}">Get early access</a></div>
+  <button class="menu" type="button" aria-expanded="false" aria-controls="nav-links" data-menu><span></span><span></span><span class="sr">Menu</span></button>
+</header>
+<div class="docs-layout">
+  <aside>
+    <button class="docs-toggle" type="button" aria-expanded="false" aria-controls="docs-nav" data-docs-toggle>Browse documentation <span aria-hidden="true">▾</span></button>
+    <nav class="docs-nav" id="docs-nav" aria-label="Documentation">{{NAV}}</nav>
+  </aside>
+  <main id="doc" class="prose">
+    {{CONTENT}}
+    <div class="doc-meta">{{SOURCE}}</div>
+    <nav class="pager" aria-label="Pagination">{{PREV}}{{NEXT}}</nav>
+  </main>
+  <aside class="toc" aria-label="On this page"><p>On this page</p>{{TOC}}</aside>
+</div>
+<footer class="foot"><p class="legal">© {{YEAR}} FahamuTech · Docs are synced from the public bfast repositories on GitHub · <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a></p></footer>
+</body>
+</html>

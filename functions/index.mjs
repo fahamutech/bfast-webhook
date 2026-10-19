@@ -34,3 +34,11 @@ export const adminWebhook = route('get', '/admin/api/services/:service/webhook',
 export const adminWebhookAction = route('post', '/admin/api/services/:service/webhook', admin.webhookAction);
 export const adminSecrets = route('get', '/admin/api/services/:service/secrets', admin.secrets);
 export const adminCreateSecret = route('post', '/admin/api/services/:service/secrets', admin.createSecret);
+
+// Public website and documentation.
+import {configuredSite} from '../site.mjs';
+const site = configuredSite();
+export const siteHome = route('get', '/', site.home);
+export const siteAsset = route('get', '/site/:file', site.asset);
+export const siteDocsIndex = route('get', '/docs', site.docs);
+export const siteDocs = route('get', '/docs/:doc', site.docs);

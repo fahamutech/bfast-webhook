@@ -6,7 +6,8 @@
     "test": "node --test"
   },
   "dependencies": {
-    "jose": "^6.2.12"
+    "jose": "^6.2.12",
+    "marked": "^15.0.12"
   },
   "private": true,
   "devDependencies": {

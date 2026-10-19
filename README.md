@@ -5,6 +5,8 @@ this public repository as a FaaS service named `webhook` on a Swarm manager.
 
 - `POST /github-webhook/<service>` restarts a service after a signed default-branch
   push whose repository matches that service's `GIT_CLONE_URL`.
+- `GET /` is the public BFast Cloud website, and `GET /docs` serves documentation
+  pulled live from the public bfast-functions, bfast-tools and bfast-webhook READMEs.
 - `GET /admin` is a web console where people sign in with Google (Firebase
   Authentication, project `bfastapp`) and manage the services assigned to them:
   view, create, archive (scale to 0), unarchive (scale to 1), restart, environment
@@ -149,6 +151,8 @@ cookie. No service account is required. To use another Firebase project set
 | `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
+| `SITE_REGISTER_URL` | no | Where the website's sign-up buttons go. Defaults to an email to `SITE_CONTACT_EMAIL`; point it at a registration page once self-service sign-up exists |
+| `SITE_CONTACT_EMAIL` | no | Contact address shown on the website (default `fahamutechdevelopers@gmail.com`) |
 | `WEBHOOK_ACCEPT_SHARED_SECRET` | no | Set `false` once every GitHub hook uses its per-service secret (default `true`) |
 
 Missing `ADMIN_JWT_SECRET_FILE`, `ADMIN_ORIGIN` or `ADMIN_EMAILS` disables the
@@ -238,6 +242,26 @@ the service changed and must be reloaded. Sessions last 8 hours in
 Secure/HttpOnly/SameSite=Strict cookies, responses are `no-store`, and the CSP
 only allows Google/Firebase sign-in endpoints. Sign-in attempts are limited to 30
 per minute per replica. Run one replica.
+
+## Website and docs
+
+`site.mjs` serves the landing page (`site/index.html`, `site.css`, `site.js`) and the
+docs. Docs are listed in the `docs` array in `site.mjs`: each entry maps a URL slug
+to a Markdown file in a public GitHub repository, or to a local file in
+`site/content`. Files are fetched from `raw.githubusercontent.com`, cached for 15
+minutes, and the last good copy is served if GitHub is unreachable. Raw HTML in the
+Markdown is escaped, relative links to other listed docs stay on `/docs`, and other
+relative links point to GitHub. To publish a new page, add an entry to the array.
+
+The landing page needs no build step. Motion is CSS and a small canvas script,
+paused off-screen and in background tabs, and disabled for visitors who ask for
+reduced motion. Content stays visible without JavaScript.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Landing page |
+| GET | `/docs`, `/docs/:slug` | Documentation |
+| GET | `/site/:file` | Website assets |
 
 ## Layout
 

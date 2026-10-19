@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>BFast Cloud · Node.js functions on Docker Swarm</title>
+<meta name="description" content="Write Node.js functions with bfast-functions, push to GitHub, and BFast Cloud runs them on Docker Swarm with HTTPS, secrets, logs and a team console.">
+<meta name="theme-color" content="#06120e">
+<meta property="og:title" content="BFast Cloud · Node.js functions on Docker Swarm">
+<meta property="og:description" content="Push to GitHub. Your functions go live on a managed Swarm with HTTPS, secrets, logs and team access.">
+<link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@300..700&display=swap">
+<link rel="stylesheet" href="/site/site.css">
+<script src="/site/site.js" defer></script>
+<script src="/site/js.js"></script>
+</head>
+<body class="home">
+<a class="skip" href="#main">Skip to content</a>
+<div class="cursor" aria-hidden="true"></div>
+
+<header class="nav" data-nav>
+  <a class="brand" href="/" aria-label="BFast Cloud home"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="4"><path d="M32 10 51 21v22L32 54 13 43V21z"/></g><circle cx="32" cy="32" r="6" fill="currentColor"/></svg><span>BFast<b>Cloud</b></span></a>
+  <nav class="nav-links" id="nav-links" aria-label="Main">
+    <a href="#how">How it works</a><a href="#functions">Functions</a><a href="#console">Console</a><a href="#security">Security</a><a href="#pricing">Pricing</a><a href="/docs">Docs</a><a class="m-only" href="{{CONSOLE_URL}}">Sign in</a><a class="m-only" href="{{REGISTER_URL}}">Get early access →</a>
+  </nav>
+  <div class="nav-cta"><a class="link" href="{{CONSOLE_URL}}">Sign in</a><a class="btn btn-primary btn-sm" href="{{REGISTER_URL}}" data-magnetic>Get early access</a></div>
+  <button class="menu" type="button" aria-expanded="false" aria-controls="nav-links" data-menu><span></span><span></span><span class="sr">Menu</span></button>
+</header>
+
+<main id="main">
+<!-- HERO -->
+<section class="hero" aria-labelledby="hero-title">
+  <canvas class="swarm" aria-hidden="true"></canvas>
+  <div class="hero-inner">
+    <p class="eyebrow reveal"><span class="pulse"></span><span>Early access · Node.js FaaS on Docker Swarm</span></p>
+    <h1 id="hero-title" class="kinetic" data-kinetic>
+      <span class="line">Push your functions.</span>
+      <span class="line">We run the <span class="swap" data-swap="swarm.|HTTPS.|secrets.|rollouts.|logs.">swarm.</span></span>
+    </h1>
+    <p class="lede reveal">BFast Cloud turns a GitHub repository of <a href="/docs/functions">bfast-functions</a> into a live, TLS-secured service. You get one-push deploys, per-service secrets, logs and a console your whole team can sign in to with Google.</p>
+    <div class="hero-actions reveal">
+      <a class="btn btn-primary" href="{{REGISTER_URL}}" data-magnetic>Request early access <i>→</i></a>
+      <button class="btn btn-ghost install" type="button" data-copy="npm install -g bfast-tools"><code>npm i -g bfast-tools</code><span data-copy-label>Copy</span></button>
+    </div>
+    <ul class="hero-proof reveal" aria-label="Highlights">
+      <li><b>4</b> function types</li><li><b>1</b> git push to deploy</li><li><b>0</b> servers to SSH into</li>
+    </ul>
+  </div>
+  <div class="hero-term reveal" aria-label="Example deployment log">
+    <div class="term-bar"><i></i><i></i><i></i><span>deploy · my-functions_faas</span></div>
+    <pre class="term" data-typing>
+<span class="c">$</span> git push origin main
+<span class="m">→</span> github  push · main · a1b2c3d "Add /orders route"
+<span class="m">→</span> webhook signature verified (per-service secret)
+<span class="m">→</span> swarm   rolling update 1/2 … 2/2 <span class="ok">converged</span>
+<span class="m">→</span> runtime cloned main · npm install · 6 functions
+<span class="m">→</span> traefik https://my-functions.api.example.com <span class="ok">TLS ✓</span>
+<span class="c">$</span> curl …/functions-health
+{"message":"running"}</pre>
+  </div>
+  <a class="scroll-hint" href="#marquee" aria-label="Scroll to learn more"><span></span></a>
+</section>
+
+<!-- MARQUEE -->
+<section id="marquee" class="marquee" aria-label="Capabilities">
+  <div class="marquee-track" data-marquee>
+    <span>HTTP routes</span><span>Socket.IO events</span><span>Cron jobs</span><span>Guards</span><span>Git push deploys</span><span>Automatic HTTPS</span><span>Write-only secrets</span><span>Live logs</span><span>Google sign-in</span><span>Archive &amp; unarchive</span><span>Per-user access</span><span>Swarm status</span>
+  </div>
+</section>
+
+<!-- SCROLLYTELLING -->
+<section id="how" class="story" aria-labelledby="how-title">
+  <div class="section-head reveal"><p class="eyebrow">How it works</p><h2 id="how-title">From your laptop to a live URL in five moves.</h2></div>
+  <div class="story-grid">
+    <ol class="steps">
+      <li class="step" data-step="0"><span class="num">01</span><h3>Scaffold a workspace</h3><p>The <code>bfast</code> CLI creates a functions workspace with a <code>functions/</code> folder and a <code>bfast.json</code>. Run it locally with file-watch reloads.</p></li>
+      <li class="step" data-step="1"><span class="num">02</span><h3>Export functions</h3><p>Every exported descriptor becomes an endpoint: <code>onRequest</code> for HTTP, <code>onEvent</code> for Socket.IO, <code>onJob</code> for cron, <code>onGuard</code> for middleware.</p></li>
+      <li class="step" data-step="2"><span class="num">03</span><h3>Push to GitHub</h3><p>A signed webhook reaches BFast Cloud. The HMAC signature is checked with your service's own secret, and only pushes to the default branch of the matching repository deploy.</p></li>
+      <li class="step" data-step="3"><span class="num">04</span><h3>Swarm rolls it out</h3><p>Docker Swarm replaces tasks one at a time. Each new task clones your default branch, installs dependencies and loads your functions.</p></li>
+      <li class="step" data-step="4"><span class="num">05</span><h3>Live over HTTPS</h3><p>Traefik routes your hostnames and issues Let's Encrypt certificates automatically. Health and function listings are built in.</p></li>
+    </ol>
+    <div class="stage" aria-hidden="true">
+      <div class="stage-inner">
+        <div class="scene" data-scene="0"><div class="window"><div class="term-bar"><i></i><i></i><i></i><span>terminal</span></div><pre class="term"><span class="c">$</span> npm i -g bfast-tools
+<span class="c">$</span> bfast fs create my-functions
+  <span class="ok">✓</span> bfast.json
+  <span class="ok">✓</span> package.json
+  <span class="ok">✓</span> functions/index.mjs
+<span class="c">$</span> cd my-functions && bfast fs serve
+  listening on <span class="ok">:3000</span> · watching files</pre></div></div>
+        <div class="scene" data-scene="1"><div class="window"><div class="term-bar"><i></i><i></i><i></i><span>functions/index.mjs</span></div><pre class="code"><span class="k">export const</span> orders = {
+  method: <span class="s">'post'</span>,
+  path: <span class="s">'/orders'</span>,
+  onRequest: <span class="k">async</span> (req, res) =&gt; {
+    res.status(<span class="n">201</span>).json({id: crypto.randomUUID()});
+  }
+};
+
+<span class="k">export const</span> live = {
+  name: <span class="s">'/live'</span>,
+  onEvent: ({body}, res) =&gt; res.announce(body)
+};</pre></div></div>
+        <div class="scene" data-scene="2"><div class="webhook-card">
+          <div class="gh"><svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>push → main</span></div>
+          <div class="packet"><span>POST /github-webhook/my-functions_faas</span><span>X-Hub-Signature-256: sha256=9f2c…e41a</span></div>
+          <ul class="checks"><li><i></i>Signature matches service secret</li><li><i></i>Event is a push</li><li><i></i>Ref is the default branch</li><li><i></i>Repository matches GIT_CLONE_URL</li></ul>
+          <div class="verdict">Restart requested</div>
+        </div></div>
+        <div class="scene" data-scene="3"><div class="swarm-map">
+          <div class="node mgr"><b>manager-1</b><div class="tasks"><i></i><i></i></div></div>
+          <div class="node"><b>worker-1</b><div class="tasks"><i></i><i></i></div></div>
+          <div class="node"><b>worker-2</b><div class="tasks"><i></i><i></i></div></div>
+          <p class="legend"><span class="old"></span> old task <span class="new"></span> new task</p>
+        </div></div>
+        <div class="scene" data-scene="4"><div class="browser">
+          <div class="url"><span class="lock">🔒</span> https://my-functions.api.example.com/orders</div>
+          <pre class="code">HTTP/2 201
+content-type: application/json
+
+{ <span class="s">"id"</span>: <span class="s">"7c0e…b2"</span> }</pre>
+          <div class="cert">Certificate · Let's Encrypt · auto-renewed</div>
+        </div></div>
+      </div>
+      <div class="progress"><span></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- FUNCTION TYPES -->
+<section id="functions" class="functions" aria-labelledby="fn-title">
+  <div class="section-head reveal"><p class="eyebrow">bfast-functions</p><h2 id="fn-title">Four descriptors. Everything a backend needs.</h2><p>Plain JavaScript objects. No framework lock-in, no build step: Express under the hood for HTTP, Socket.IO for realtime, node-schedule for jobs.</p></div>
+  <div class="fn-tabs reveal" role="tablist" aria-label="Function types">
+    <button role="tab" aria-selected="true" aria-controls="fn-http" id="t-http">HTTP</button>
+    <button role="tab" aria-selected="false" aria-controls="fn-event" id="t-event">Realtime</button>
+    <button role="tab" aria-selected="false" aria-controls="fn-job" id="t-job">Jobs</button>
+    <button role="tab" aria-selected="false" aria-controls="fn-guard" id="t-guard">Guards</button>
+  </div>
+  <div class="fn-panels reveal">
+    <article class="fn-panel" id="fn-http" role="tabpanel" aria-labelledby="t-http">
+      <div class="fn-copy"><h3>HTTP routes</h3><p>Express request and response objects, any method, any path. Omit <code>path</code> and the route becomes <code>/functions/&lt;name&gt;</code>. Add a <code>description</code> and it appears on the built-in <code>/functions-all</code> page.</p></div>
+      <pre class="code"><span class="k">export const</span> hello = {
+  method: <span class="s">'get'</span>,
+  path: <span class="s">'/hello'</span>,
+  description: <span class="s">'Greets the caller'</span>,
+  onRequest: (req, res) =&gt;
+    res.json({message: <span class="s">`Hello ${req.query.name}`</span>})
+};</pre>
+    </article>
+    <article class="fn-panel" id="fn-event" role="tabpanel" aria-labelledby="t-event" hidden>
+      <div class="fn-copy"><h3>Socket.IO events</h3><p>Each descriptor is a namespace. Reply to the sender, broadcast, announce to everyone, or join topics for rooms.</p></div>
+      <pre class="code"><span class="k">export const</span> chat = {
+  name: <span class="s">'/chat'</span>,
+  onEvent: ({auth, body}, res) =&gt; {
+    res.topic(body.room).join();
+    res.topic(body.room).announce(body.message);
+  }
+};</pre>
+    </article>
+    <article class="fn-panel" id="fn-job" role="tabpanel" aria-labelledby="t-job" hidden>
+      <div class="fn-copy"><h3>Scheduled jobs</h3><p>Cron-style rules powered by node-schedule. Reports, clean-ups and reminders live next to the code they belong to.</p></div>
+      <pre class="code"><span class="k">export const</span> nightlyReport = {
+  rule: <span class="s">'0 2 * * *'</span>,
+  onJob: <span class="k">async</span> () =&gt; {
+    <span class="k">await</span> sendDailySummary();
+  }
+};</pre>
+    </article>
+    <article class="fn-panel" id="fn-guard" role="tabpanel" aria-labelledby="t-guard" hidden>
+      <div class="fn-copy"><h3>Guards</h3><p>Middleware for authentication, rate limits or logging, mounted globally or on a path prefix.</p></div>
+      <pre class="code"><span class="k">export const</span> apiKey = {
+  path: <span class="s">'/orders'</span>,
+  onGuard: (req, res, next) =&gt;
+    req.get(<span class="s">'x-api-key'</span>) === process.env.API_KEY
+      ? next()
+      : res.status(<span class="n">401</span>).end()
+};</pre>
+    </article>
+  </div>
+</section>
+
+<!-- CONSOLE -->
+<section id="console" class="console-sec" aria-labelledby="console-title">
+  <div class="section-head reveal"><p class="eyebrow">The console</p><h2 id="console-title">Day-to-day operations, without SSH.</h2><p>Sign in with Google. Administrators see the whole Swarm; developers see only the services they've been given.</p></div>
+  <div class="console-wrap">
+    <div class="mock" data-tilt>
+      <div class="mock-top"><b>BFast</b><span>Cloud / Swarm manager</span><em>dev@team.io · user</em></div>
+      <div class="mock-body">
+        <div class="mock-side"><p>Services</p><div class="svc on"><i class="g"></i>orders_faas<small>2/2 running</small></div><div class="svc"><i class="g"></i>shop_faas<small>1/1 running</small></div><div class="svc"><i class="a"></i>legacy_faas<small>archived</small></div></div>
+        <div class="mock-main">
+          <h4>orders_faas</h4>
+          <div class="mock-tabs"><span>Overview</span><span class="on">Environment</span><span>Secrets</span><span>Auto-deploy</span><span>Logs</span></div>
+          <div class="mock-env"><span>DATABASE_URL</span><span>••••••••••••</span></div>
+          <div class="mock-env"><span>STRIPE_KEY</span><span>/run/secrets/stripe-key</span></div>
+          <div class="mock-env"><span>MODE</span><span>git</span></div>
+          <div class="mock-log"><span>12:04:11 orders_faas.1 | POST /orders 201 18ms</span><span>12:04:13 orders_faas.2 | GET /functions-health 200</span><span>12:04:15 orders_faas.1 | job nightlyReport scheduled</span></div>
+        </div>
+      </div>
+    </div>
+    <ul class="callouts">
+      <li class="reveal"><b>Environment editor</b>Text, file and Base64 values, hidden until revealed.</li>
+      <li class="reveal"><b>Write-only secrets</b>Versioned Swarm secrets mounted under <code>/run/secrets</code>.</li>
+      <li class="reveal"><b>Auto-deploy</b>Payload URL, per-service secret, pause, rotate and delivery history.</li>
+      <li class="reveal"><b>Logs &amp; tasks</b>Tail the last 1,000 lines and see why a task failed.</li>
+      <li class="reveal"><b>Archive</b>Scale to zero when a project sleeps; unarchive in one click.</li>
+      <li class="reveal"><b>Team access</b>Assign services to Google accounts; nobody sees what isn't theirs.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- FEATURES BENTO -->
+<section class="features" aria-labelledby="features-title">
+  <div class="section-head reveal"><p class="eyebrow">Platform</p><h2 id="features-title">Built on boring, proven infrastructure.</h2></div>
+  <div class="bento">
+    <article class="card big reveal" data-glow><span class="ic">⇪</span><h3>Git push deploys</h3><p>Point a GitHub webhook at your service. Pushes to the default branch roll out; pushes to feature branches are recorded and ignored.</p></article>
+    <article class="card reveal" data-glow><span class="ic">🔒</span><h3>HTTPS everywhere</h3><p>Traefik with Let's Encrypt. Default hostnames per project, plus your own domains.</p></article>
+    <article class="card reveal" data-glow><span class="ic">⟳</span><h3>Rolling updates</h3><p>Docker Swarm replaces tasks one by one and restarts them on failure.</p></article>
+    <article class="card reveal" data-glow><span class="ic">⚙</span><h3>Resource limits</h3><p>CPU and memory limits per service, plus replica count and restart policy.</p></article>
+    <article class="card reveal" data-glow><span class="ic">◎</span><h3>Swarm status</h3><p>Nodes, roles, availability and every service's running versus desired tasks.</p></article>
+    <article class="card wide reveal" data-glow><span class="ic">{ }</span><h3>Bring your npm packages</h3><p>Your <code>package.json</code> dependencies install on start. Run from Git, an npm package or a tarball URL: <code>MODE=git</code>, <code>npm</code> or <code>url</code>.</p></article>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section id="security" class="security" aria-labelledby="sec-title">
+  <div class="sec-copy reveal"><p class="eyebrow">Security</p><h2 id="sec-title">Secure defaults, not optional extras.</h2><p>Everything that changes your services is authenticated, signed and scoped.</p></div>
+  <ul class="sec-list">
+    <li class="reveal"><b>Signed deploys</b>GitHub HMAC-SHA256 signatures, with a separate rotatable secret for every service.</li>
+    <li class="reveal"><b>Google identity</b>Firebase-verified Google accounts with verified email only.</li>
+    <li class="reveal"><b>Hardened sessions</b>HttpOnly, Secure, SameSite=Strict cookies with CSRF tokens and exact-origin checks.</li>
+    <li class="reveal"><b>Secrets stay secret</b>Swarm secrets are write-only and never returned by the API or written to logs.</li>
+    <li class="reveal"><b>Least privilege</b>Users only reach their assigned services. Infrastructure services are read-only.</li>
+    <li class="reveal"><b>No surprise deletes</b>Services are archived, not deleted, from the console.</li>
+  </ul>
+</section>
+
+<!-- PRICING -->
+<section id="pricing" class="pricing" aria-labelledby="pricing-title">
+  <div class="section-head reveal"><p class="eyebrow">Plans</p><h2 id="pricing-title">Start free during early access.</h2><p>Pricing will be announced before general availability. Early-access teams keep their setup.</p></div>
+  <div class="plans">
+    <article class="plan reveal" data-glow><h3>Developer</h3><p class="price">Free <small>during early access</small></p><ul><li>Functions services on the shared Swarm</li><li>Git push deploys over HTTPS</li><li>Environment, secrets and logs</li><li>Community support</li></ul><a class="btn btn-ghost" href="{{REGISTER_URL}}">Request access</a></article>
+    <article class="plan featured reveal" data-glow><span class="tag">For teams</span><h3>Team</h3><p class="price">Contact us</p><ul><li>Everything in Developer</li><li>Multiple services and teammates</li><li>Custom domains</li><li>Higher CPU and memory limits</li><li>Priority support</li></ul><a class="btn btn-primary" href="{{REGISTER_URL}}" data-magnetic>Talk to us</a></article>
+    <article class="plan reveal" data-glow><h3>Self-hosted</h3><p class="price">Contact us</p><ul><li>Run the stack on your own servers</li><li>Your Swarm, your data, your domains</li><li>Setup assistance</li><li>Open-source runtime and CLI (MIT)</li></ul><a class="btn btn-ghost" href="mailto:{{CONTACT_EMAIL}}?subject=BFast%20Cloud%20self-hosted">Email us</a></article>
+  </div>
+</section>
+
+<!-- DOCS TEASER -->
+<section class="docs-teaser" aria-labelledby="docs-title">
+  <div class="section-head reveal"><p class="eyebrow">Documentation</p><h2 id="docs-title">Read the docs, straight from the source.</h2><p>Docs are pulled live from the public bfast repositories, so they always match the code.</p></div>
+  <div class="doc-cards">
+    <a class="doc-card reveal" href="/docs/getting-started" data-glow><span>Start</span><h3>Getting started</h3><p>Install, write, run, push, deploy.</p></a>
+    <a class="doc-card reveal" href="/docs/function-spec" data-glow><span>Runtime</span><h3>Function specification</h3><p>HTTP, events, guards and jobs.</p></a>
+    <a class="doc-card reveal" href="/docs/cli" data-glow><span>CLI</span><h3>bfast-tools</h3><p>Create and serve workspaces locally.</p></a>
+    <a class="doc-card reveal" href="/docs/cloud" data-glow><span>Cloud</span><h3>Console &amp; deploys</h3><p>Webhooks, roles, secrets and operations.</p></a>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq" aria-labelledby="faq-title">
+  <div class="section-head reveal"><p class="eyebrow">FAQ</p><h2 id="faq-title">Questions developers ask.</h2></div>
+  <div class="faq-list">
+    <details class="reveal"><summary>What do I need to deploy?</summary><p>A GitHub repository containing a bfast-functions workspace. Your <code>package.json</code> dependencies install when the service starts, and the default branch is what runs.</p></details>
+    <details class="reveal"><summary>Can I use private repositories?</summary><p>Yes. Set <code>GIT_USERNAME</code> and a <code>GIT_TOKEN</code> on the service, ideally through a Swarm secret.</p></details>
+    <details class="reveal"><summary>How do I store API keys?</summary><p>Create a Swarm secret in the console, attach it to your service, then set an environment variable to its <code>/run/secrets/…</code> path. The runtime loads the value at start-up.</p></details>
+    <details class="reveal"><summary>What happens to a service I'm not using?</summary><p>Archive it. It scales to zero replicas and keeps its configuration, secrets and hostnames. Unarchive starts one replica again.</p></details>
+    <details class="reveal"><summary>Is it open source?</summary><p>The runtime (bfast-functions), the CLI (bfast-tools) and the deploy webhook are on GitHub. You can run the stack on your own Swarm with the self-hosted plan's help.</p></details>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final" aria-labelledby="final-title">
+  <div class="final-inner reveal">
+    <h2 id="final-title" class="kinetic-big" data-kinetic>Ship the function.<br>Skip the servers.</h2>
+    <div class="hero-actions"><a class="btn btn-primary" href="{{REGISTER_URL}}" data-magnetic>Get early access <i>→</i></a><a class="btn btn-ghost" href="/docs/getting-started">Read the guide</a></div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-grid">
+    <div><a class="brand" href="/"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="4"><path d="M32 10 51 21v22L32 54 13 43V21z"/></g><circle cx="32" cy="32" r="6" fill="currentColor"/></svg><span>BFast<b>Cloud</b></span></a><p>Node.js functions on Docker Swarm, by FahamuTech.</p></div>
+    <div><p class="h">Product</p><a href="#how">How it works</a><a href="#console">Console</a><a href="#pricing">Pricing</a><a href="{{CONSOLE_URL}}">Sign in</a></div>
+    <div><p class="h">Docs</p><a href="/docs/getting-started">Getting started</a><a href="/docs/function-spec">Functions</a><a href="/docs/cli">CLI</a><a href="/docs/cloud">Cloud</a></div>
+    <div><p class="h">Open source</p><a href="https://github.com/fahamutech/bfast-functions" target="_blank" rel="noopener">bfast-functions</a><a href="https://github.com/fahamutech/bfast-tools" target="_blank" rel="noopener">bfast-tools</a><a href="https://github.com/fahamutech/bfast-webhook" target="_blank" rel="noopener">bfast-webhook</a></div>
+  </div>
+  <p class="legal">© {{YEAR}} FahamuTech · <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a></p>
+</footer>
+</body>
+</html>
