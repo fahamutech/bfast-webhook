@@ -3,6 +3,7 @@ import {dockerRequest, demuxLogs, filters, fail} from './docker.mjs';
 import {createFirebaseVerifier, createSessions, parseAccess, serializeUsers, usersInput, normalizeEmail} from './auth.mjs';
 import {classify, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv} from './services.mjs';
 import {secretReference, secretChoices, newSecret, secretAttachments} from './secrets.mjs';
+import {serviceWebhookSecret, webhookGeneration, generationLabel, pausedLabel, repositoryFromCloneUrl, createDeliveryLog} from './webhook.mjs';
 
 export const defaultFirebaseConfig = {projectId: 'bfastapp', appId: '1:311831913786:web:6be76738b599546b',
   apiKey: 'AIzaSyBNnvwleeyFislflOkB-6RFNvo7w1FI3ko', authDomain: 'bfastapp.firebaseapp.com', messagingSenderId: '311831913786'};
@@ -12,7 +13,8 @@ const asset = file => readFileSync(new URL(`./admin/${file}`, import.meta.url), 
 
 export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], verifyIdToken, firebaseConfig = defaultFirebaseConfig,
   adminEmails = '', serviceUsers = '', selfName = 'webhook', cluster = '', hostDomain = '',
-  defaultImage = 'joshuamshana/bfastfunction:latest', now = () => Date.now()} = {}) {
+  defaultImage = 'joshuamshana/bfastfunction:latest', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
+  now = () => Date.now()} = {}) {
   if (!jwtSecret || jwtSecret.length < 32) throw new Error('ADMIN_JWT_SECRET_FILE must hold a 32+ character signing key');
   if (!origin || new URL(origin).origin !== origin || !origin.startsWith('https://')) throw new Error('ADMIN_ORIGIN must be an exact HTTPS origin');
   if (!parseAccess(adminEmails).admins.size) throw new Error('ADMIN_EMAILS must list at least one Google account');
@@ -88,6 +90,18 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     return result;
   };
   const isAppOnly = s => classify(s, options()) === 'app';
+  const webhookView = service => {
+    const name = service.Spec.Name, variables = envMap(service.Spec.TaskTemplate.ContainerSpec.Env), labels = service.Spec.Labels || {};
+    const repository = repositoryFromCloneUrl(variables.GIT_CLONE_URL), mode = variables.MODE?.trim() || 'git', problems = [];
+    if (!webhookSecret) problems.push('WEBHOOK_SECRET_FILE is not set on the management service.');
+    if (mode !== 'git') problems.push(`MODE is "${mode}". Only MODE=git services redeploy from GitHub pushes.`);
+    if (mode === 'git' && !repository) problems.push('GIT_CLONE_URL is missing or is not a github.com repository URL.');
+    const generation = webhookGeneration(labels);
+    return {service: name, version: service.Version.Index, url: `${origin}/github-webhook/${encodeURIComponent(name)}`, contentType: 'application/json', events: ['push'],
+      repository, settingsUrl: repository ? `https://github.com/${repository}/settings/hooks` : null,
+      ready: !problems.length, problems, paused: labels[pausedLabel] === 'true', generation, sharedSecretAccepted: acceptSharedSecret,
+      secret: webhookSecret ? serviceWebhookSecret(webhookSecret, name, generation) : null, ...deliveryLog.get(name)};
+  };
 
   return {
     page: wrap(async (_, res) => res.type('html').send(asset('index.html')), {publicRoute: true}),
@@ -165,6 +179,27 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
       const text = {archive: 'Archived (scaled to 0 replicas)', unarchive: 'Unarchived (scaled to 1 replica)', restart: 'Restart requested'}[action];
       res.json({ok: true, message: `${text}: ${service.Spec.Name}`, warnings: result.Warnings || []});
     }), {write: true}),
+    webhook: wrap(async (req, res, u) => {
+      const service = await inspect(req.params.service, u);
+      res.json(webhookView(service));
+    }),
+    webhookAction: wrap(locked(async (req, res, u) => {
+      if (!req.body || typeof req.body !== 'object' || Object.keys(req.body).some(k => !['action', 'version'].includes(k))) throw fail(400, 'Provide action and version');
+      const {action, version} = req.body;
+      if (!['rotate', 'pause', 'resume'].includes(action)) throw fail(400, 'Unknown action');
+      const service = await inspect(req.params.service, u);
+      if (version !== service.Version.Index) throw fail(409, 'Service changed. Reload before saving.');
+      if (action === 'rotate' && !webhookSecret) throw fail(503, 'WEBHOOK_SECRET_FILE is not configured');
+      // Label-only change: Swarm updates the service without replacing its tasks.
+      const spec = structuredClone(service.Spec);
+      spec.Labels ||= {};
+      if (action === 'rotate') spec.Labels[generationLabel] = String(webhookGeneration(spec.Labels) + 1);
+      else if (action === 'pause') spec.Labels[pausedLabel] = 'true';
+      else delete spec.Labels[pausedLabel];
+      await docker('POST', `/services/${service.ID}/update?version=${service.Version.Index}`, spec);
+      const updated = await docker('GET', `/services/${service.ID}`);
+      res.json({...webhookView(Object.assign(updated, {kind: service.kind})), message: {rotate: 'Secret rotated. Paste the new secret into the GitHub webhook settings; the old one stops working now.', pause: 'Auto-deploy paused. Pushes are recorded but do not restart the service.', resume: 'Auto-deploy resumed.'}[action]});
+    }), {write: true}),
     secrets: wrap(async (req, res, u) => {
       const service = await inspect(req.params.service, u, {kinds: ['app']});
       res.json(await secretChoices(docker, service, isAppOnly));
@@ -227,9 +262,9 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
   };
 }
 
-export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'create', 'swarm', 'users', 'saveUsers'];
+export const adminRoutes = ['page', 'script', 'style', 'config', 'login', 'session', 'logout', 'list', 'detail', 'tasks', 'logs', 'update', 'action', 'secrets', 'createSecret', 'webhook', 'webhookAction', 'create', 'swarm', 'users', 'saveUsers'];
 
-export function configuredAdmin(env = process.env) {
+export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
   if (!env.ADMIN_JWT_SECRET_FILE || !env.ADMIN_ORIGIN || !env.ADMIN_EMAILS) {
     const disabled = (_, res) => res.status(503).json({error: 'Service manager is not configured: set ADMIN_JWT_SECRET_FILE, ADMIN_ORIGIN and ADMIN_EMAILS'});
     return Object.fromEntries(adminRoutes.map(k => [k, disabled]));
@@ -242,5 +277,6 @@ export function configuredAdmin(env = process.env) {
   return createAdmin({jwtSecret: readFileSync(env.ADMIN_JWT_SECRET_FILE, 'utf8').trim(), origin: env.ADMIN_ORIGIN, firebaseConfig,
     adminEmails: env.ADMIN_EMAILS, serviceUsers: env.SERVICE_USERS || '', selfName: env.SELF_SERVICE_NAME || 'webhook',
     cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest',
+    webhookSecret: env.WEBHOOK_SECRET_FILE ? readFileSync(env.WEBHOOK_SECRET_FILE, 'utf8').trim() : '', acceptSharedSecret: env.WEBHOOK_ACCEPT_SHARED_SECRET !== 'false', deliveryLog,
     excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean)});
 }

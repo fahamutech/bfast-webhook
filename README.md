@@ -8,7 +8,7 @@ this public repository as a FaaS service named `webhook` on a Swarm manager.
 - `GET /admin` is a web console where people sign in with Google (Firebase
   Authentication, project `bfastapp`) and manage the services assigned to them:
   view, create, archive (scale to 0), unarchive (scale to 1), restart, environment
-  variables, Docker secrets, recent tasks, logs, Swarm status and user access.
+  variables, GitHub auto-deploy settings and delivery history, Docker secrets, recent tasks, logs, Swarm status and user access.
 
 ## Runtime
 
@@ -81,11 +81,14 @@ old password secret afterwards.
 
 ## GitHub webhook settings
 
-In the *source functions repository*, open Settings → Webhooks → Add webhook:
+The easiest way is the service's **Auto-deploy** tab in the console, which shows
+the exact values to paste. In the *source functions repository*, open
+Settings → Webhooks → Add webhook:
 
 - Payload URL: `https://webhook-faas.bfast.<bfast-cloud-host-domain>/github-webhook/example_faas`
 - Content type: `application/json`
-- Secret: the value in `github_webhook_secret`
+- Secret: the service's own secret from the Auto-deploy tab. The shared
+  `github_webhook_secret` value also works unless `WEBHOOK_ACCEPT_SHARED_SECRET=false`.
 - Events: push only
 
 The target service must use `MODE=git` (or omit `MODE`, which defaults to `git`)
@@ -99,6 +102,20 @@ and branch deletions are ignored.
 A 403 response means the URL names a different service, the target is not in Git
 mode, or its `GIT_CLONE_URL` does not match the sending repository. Signature
 failures return 401. Docker inspection/update failures return 500 and can be retried.
+
+### Per-service secrets
+
+Each service gets its own webhook secret, derived from `github_webhook_secret` with
+HMAC-SHA256 over the service name and a generation number. Nothing extra is stored:
+the generation lives in the service label `bfast.webhook.generation`. A user who can
+see one service's secret cannot sign deliveries for another service. **Rotate secret**
+bumps the generation, so the old value stops working immediately. **Pause** sets
+`bfast.webhook.paused=true`; pushes are still recorded but do not restart the
+service. Both are label-only updates and do not restart running tasks.
+
+Verification tries the shared secret first without contacting Docker. Otherwise it
+reads the service labels to check the per-service secret; these unverified lookups
+are limited to 60 per minute.
 
 ### Firebase Authentication (one-time)
 
@@ -132,6 +149,7 @@ cookie. No service account is required. To use another Firebase project set
 | `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
+| `WEBHOOK_ACCEPT_SHARED_SECRET` | no | Set `false` once every GitHub hook uses its per-service secret (default `true`) |
 
 Missing `ADMIN_JWT_SECRET_FILE`, `ADMIN_ORIGIN` or `ADMIN_EMAILS` disables the
 console with HTTP 503 without affecting the GitHub webhook.
@@ -176,6 +194,11 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
   scales it to 1. Configuration, secrets and labels are kept. Raise replicas
   further from *Settings*.
 - **Restart**: forces a rolling task replacement (same as a webhook deploy).
+- **Auto-deploy**: payload URL, per-service secret (reveal/copy), readiness checks
+  (`MODE=git` and a github.com `GIT_CLONE_URL`), a link to the repository's webhook
+  settings, pause/resume, rotate secret, **Deploy now**, and the last 20 deliveries
+  with result, branch, commit and pusher. History is in memory and resets when the
+  management service restarts; signature failures are counted per service.
 - **Environment**: text, file and Base64 values; removing a row deletes the
   variable. Saving redeploys.
 - **Secrets**: create versioned Swarm secrets scoped to the service, attach them
@@ -204,6 +227,8 @@ Swarm restart it; sessions are stateless JWTs, so people stay signed in.
 | GET | `/admin/api/services/:service/tasks` | signed in | Recent tasks |
 | GET | `/admin/api/services/:service/logs?tail=200` | signed in | Last lines (10–1000) |
 | GET/POST | `/admin/api/services/:service/secrets` | signed in | List / create secrets |
+| GET | `/admin/api/services/:service/webhook` | signed in | Auto-deploy settings, secret, readiness, deliveries |
+| POST | `/admin/api/services/:service/webhook` | signed in | `{ "action": "rotate" \| "pause" \| "resume", "version": n }` |
 | GET | `/admin/api/swarm` | admin | Swarm info, nodes, all services |
 | GET/POST | `/admin/api/users` | admin | Read / replace `SERVICE_USERS` |
 
@@ -213,6 +238,12 @@ the service changed and must be reloaded. Sessions last 8 hours in
 Secure/HttpOnly/SameSite=Strict cookies, responses are `no-store`, and the CSP
 only allows Google/Firebase sign-in endpoints. Sign-in attempts are limited to 30
 per minute per replica. Run one replica.
+
+## Layout
+
+The console works from phones to wide monitors. Below 900 px the service list
+and the service detail become separate screens with a back button; tabs scroll
+sideways, tables scroll inside their card, and forms stack into one column.
 
 ## Tests
 

@@ -5,6 +5,7 @@ import {createAdmin} from '../admin.mjs';
 import {classify, updatedSpec, serviceDetail, actionSpec, newServiceSpec} from '../services.mjs';
 import {parseAccess, serializeUsers} from '../auth.mjs';
 import {demuxLogs} from '../docker.mjs';
+import {createDeliveryLog, serviceWebhookSecret} from '../webhook.mjs';
 import {newSecret, secretAttachments} from '../secrets.mjs';
 
 const origin = 'https://admin.example.com', admin = 'admin@example.com', dev = 'dev@example.com';
@@ -38,7 +39,8 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
     if (path === '/secrets/create') { if (secrets.some(s => s.Spec.Name === body.Name)) throw Object.assign(new Error('exists'),{status:409}); const id = 'new-key-'+secrets.length; secrets.push({ID:id,Spec:{Name:body.Name,Labels:body.Labels}}); return {ID:id}; }
     throw new Error('unexpected ' + method + ' ' + path);
   };
-  const api = createAdmin({jwtSecret:'x'.repeat(40), origin, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com',
+  const deliveryLog = createDeliveryLog();
+  const api = createAdmin({jwtSecret:'x'.repeat(40), origin, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com', webhookSecret:'master-secret', deliveryLog,
     verifyIdToken: async token => { const a = accounts[token]; if (!a) throw Object.assign(new Error('bad token'),{status:401}); return {...a, picture:null}; }});
   const app = express(); app.use(express.json({limit:'1mb'}));
   app.get('/admin',api.page); app.get('/admin/app.js',api.script); app.get('/admin/style.css',api.style); app.get('/config',api.config);
@@ -46,6 +48,7 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
   app.get('/swarm',api.swarm); app.get('/users',api.users); app.post('/users',api.saveUsers);
   app.get('/services',api.list); app.post('/services',api.create); app.get('/services/:service',api.detail); app.post('/services/:service',api.update);
   app.post('/services/:service/actions',api.action); app.get('/services/:service/tasks',api.tasks); app.get('/services/:service/logs',api.logs);
+  app.get('/services/:service/webhook',api.webhook); app.post('/services/:service/webhook',api.webhookAction);
   app.get('/services/:service/secrets',api.secrets); app.post('/services/:service/secrets',api.createSecret);
   const server = app.listen(0,'127.0.0.1'); await new Promise(resolve => server.once('listening',resolve));
   t.after(() => new Promise(resolve => {server.close(resolve);server.closeAllConnections();}));
@@ -56,7 +59,7 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
     const data = await res.text(); return {status:res.status,headers:res.headers,data:(() => {try{return JSON.parse(data);}catch{return data;}})()};
   };
   const login = async (token='good') => {const r=await send('/login',{idToken:token}); if (r.status===200){cookie=r.headers.get('set-cookie').split(';')[0];csrf=r.data.csrf;} return r;};
-  return {send,calls,services,login,advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
+  return {send,calls,services,deliveryLog,login,advance:ms => clock+=ms, reset:() => {cookie='';csrf='';}};
 }
 const input = s => { const {id,name,image,labels,constraints,networks,...rest} = serviceDetail(s); return rest; };
 
@@ -229,4 +232,30 @@ test('secret inputs reject paths, executable modes, duplicate mounts and oversiz
   const choices=[{id:'keep',name:'existing'},{id:'second',name:'second'}], ref={id:'keep',target:'password',uid:'0',gid:'0',mode:256};
   for (const patch of [{target:'../file'},{target:'/root/file'},{mode:511},{uid:'root'},{gid:'4294967295'},{File:{}}]) assert.throws(()=>secretAttachments(service,[{...ref,...patch}],choices));
   assert.throws(()=>secretAttachments(service,[ref,ref],choices)); assert.throws(()=>secretAttachments(service,[ref,{...ref,id:'second'}],choices));
+});
+
+test('auto-deploy details show the per-service secret and readiness; rotate and pause only change labels',async t => {
+  const s=await setup(t); await s.login('devtoken');
+  s.services[0].Spec.TaskTemplate.ContainerSpec.Env.push('MODE=git','GIT_CLONE_URL=https://github.com/acme/demo.git');
+  s.deliveryLog.record('example_faas',{result:'deployed',branch:'main'});
+  let w=(await s.send('/services/abc123/webhook')).data;
+  assert.equal(w.url,origin+'/github-webhook/example_faas'); assert.equal(w.ready,true); assert.equal(w.repository,'acme/demo');
+  assert.equal(w.settingsUrl,'https://github.com/acme/demo/settings/hooks'); assert.equal(w.secret,serviceWebhookSecret('master-secret','example_faas',0));
+  assert.equal(w.deliveries[0].result,'deployed'); assert.equal((await s.send('/services')).data[0].autoDeploy,'on');
+  assert.equal((await s.send('/services/abc123/webhook',{action:'rotate',version:w.version-1})).status,409);
+  assert.equal((await s.send('/services/abc123/webhook',{action:'explode',version:w.version})).status,400);
+  const forceBefore=s.services[0].Spec.TaskTemplate.ForceUpdate;
+  const rotated=(await s.send('/services/abc123/webhook',{action:'rotate',version:w.version})).data;
+  assert.equal(rotated.generation,1); assert.equal(rotated.secret,serviceWebhookSecret('master-secret','example_faas',1)); assert.notEqual(rotated.secret,w.secret);
+  assert.equal(s.services[0].Spec.TaskTemplate.ForceUpdate,forceBefore);
+  const paused=(await s.send('/services/abc123/webhook',{action:'pause',version:rotated.version})).data; assert.equal(paused.paused,true);
+  assert.equal((await s.send('/services')).data[0].autoDeploy,'paused');
+  assert.equal((await s.send('/services/abc123/webhook',{action:'resume',version:paused.version})).data.paused,false);
+  assert.equal((await s.send('/services/other1/webhook')).status,403);
+});
+test('auto-deploy explains why a service is not ready',async t => {
+  const s=await setup(t); await s.login();
+  s.services[1].Spec.TaskTemplate.ContainerSpec.Env=['MODE=npm','NPM_TAR=pkg'];
+  const w=(await s.send('/services/other1/webhook')).data;
+  assert.equal(w.ready,false); assert.match(w.problems[0],/MODE is "npm"/); assert.equal((await s.send('/services')).data[1].autoDeploy,'off');
 });

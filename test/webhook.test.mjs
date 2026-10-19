@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHmac, randomUUID} from 'node:crypto';
 import {test} from 'node:test';
-import {createWebhookHandler, repositoryFromCloneUrl} from '../webhook.mjs';
+import {createWebhookHandler, repositoryFromCloneUrl, serviceWebhookSecret, createDeliveryLog} from '../webhook.mjs';
 
 const secret = 'test-secret';
 const service = {
@@ -22,16 +22,17 @@ function setup(target = service) {
 async function send(handler, {
   name = 'example_faas', repo = 'example/functions', branch = 'main',
   ref = `refs/heads/${branch}`, deleted = false, signed = true,
-  event = 'push', delivery = randomUUID()
+  event = 'push', delivery = randomUUID(), key = secret
 } = {}) {
   // Whitespace and Unicode ensure the signature uses exact bytes, not reserialized JSON.
   const body = Buffer.from(JSON.stringify({
-    repository: {full_name: repo, default_branch: branch}, ref, deleted, note: 'café'
+    repository: {full_name: repo, default_branch: branch}, ref, deleted, note: 'café',
+    head_commit: {id: 'abcdef1234567890', message: 'Fix bug\n\nDetails', author: {username: 'dev'}, url: 'https://github.com/example/functions/commit/abcdef1'}, pusher: {name: 'dev'}
   }, null, 2) + '\n');
   const req = {params: {service: name}, rawBody: body, headers: {
     'x-github-event': event, 'x-github-delivery': delivery,
     'x-hub-signature-256': signed
-      ? 'sha256=' + createHmac('sha256', secret).update(body).digest('hex') : 'invalid'
+      ? 'sha256=' + createHmac('sha256', key).update(body).digest('hex') : 'invalid'
   }};
   const res = {writeHead(status) {this.status = status;}, end(body) {this.body = body;}};
   await handler(req, res);
@@ -110,4 +111,41 @@ test('Docker inspection failure never restarts the service', async () => {
   });
   assert.equal((await send(handler)).status, 500);
   assert.equal(restarts, 0);
+});
+
+test('per-service secrets verify through the generation label and reject other services or rotated values', async () => {
+  const log = createDeliveryLog(), calls = {inspect: [], restart: []};
+  let target = {...service, labels: {'bfast.webhook.generation': '2'}};
+  const handler = createWebhookHandler({secret, log, inspect: async n => { calls.inspect.push(n); return target; }, restart: async id => { calls.restart.push(id); }});
+  assert.equal((await send(handler, {key: serviceWebhookSecret(secret, 'example_faas', 2)})).status, 200);
+  assert.equal((await send(handler, {key: serviceWebhookSecret(secret, 'example_faas', 1)})).status, 401);
+  assert.equal((await send(handler, {key: serviceWebhookSecret(secret, 'other_faas', 2)})).status, 401);
+  assert.deepEqual(calls.restart, ['service-id']);
+  const {deliveries, signatureFailures} = log.get('example_faas');
+  assert.equal(deliveries.length, 1); assert.equal(signatureFailures.count, 2);
+  assert.deepEqual({result: deliveries[0].result, branch: deliveries[0].branch, secret: deliveries[0].secret, commit: deliveries[0].commit.message, pusher: deliveries[0].pusher},
+    {result: 'deployed', branch: 'main', secret: 'service', commit: 'Fix bug', pusher: 'dev'});
+});
+
+test('shared secret can be disabled; paused services record pushes without restarting; pings are recorded', async () => {
+  const log = createDeliveryLog(), restarts = [];
+  const handler = createWebhookHandler({secret, log, acceptSharedSecret: false, inspect: async () => ({...service, labels: {'bfast.webhook.paused': 'true'}}), restart: async id => restarts.push(id)});
+  assert.equal((await send(handler)).status, 401);
+  const key = serviceWebhookSecret(secret, 'example_faas', 0);
+  assert.equal((await send(handler, {key, event: 'ping'})).status, 200);
+  assert.equal((await send(handler, {key})).body, 'Auto-deploy paused');
+  assert.deepEqual(restarts, []);
+  assert.deepEqual(log.get('example_faas').deliveries.map(d => d.result), ['paused', 'ping']);
+});
+
+test('unverified per-service lookups are rate limited and the delivery log is bounded', async () => {
+  const handler = createWebhookHandler({secret, inspect: async () => service, restart: async () => {}});
+  let limited = 0;
+  for (let i = 0; i < 62; i++) if ((await send(handler, {key: 'wrong'})).status === 429) limited++;
+  assert.equal(limited, 2);
+  const log = createDeliveryLog({perService: 3, maxServices: 2});
+  for (let i = 0; i < 5; i++) log.record('a', {result: String(i)});
+  log.record('b', {}); log.record('c', {});
+  assert.deepEqual(log.get('a').deliveries, []);
+  assert.equal(log.get('c').deliveries.length, 1);
 });

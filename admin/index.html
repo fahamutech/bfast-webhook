@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BFast · Services</title><link rel="stylesheet" href="/admin/style.css"><script src="/admin/app.js" type="module"></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#1c6149"><title>BFast · Services</title><link rel="stylesheet" href="/admin/style.css"><script src="/admin/app.js" type="module"></script></head>
 <body>
 <header><a href="/admin">BFast <span>Cloud / Swarm manager</span></a><div id="who" class="who" hidden><img id="avatar" alt="" hidden><span id="who-text"></span><button id="logout" class="secondary">Sign out</button></div></header>
 <p id="message" role="status" aria-live="polite"></p>
@@ -8,15 +8,16 @@
 <section id="workspace" class="workspace" hidden>
 <aside><nav id="admin-nav" class="nav" hidden><button data-view="swarm" class="nav-item">Swarm status</button><button data-view="users" class="nav-item">Users &amp; access</button><button data-view="create" class="nav-item accent">+ New service</button></nav>
 <div class="toolbar"><h2>Services</h2><button id="refresh" class="secondary small" title="Refresh">↻</button></div><input id="filter" type="search" placeholder="Filter services" aria-label="Filter services"><div id="services" class="services"></div></aside>
-<div id="content" class="content"><p class="muted empty">Select a service to manage it.</p></div>
+<div class="detail"><button id="back" type="button" class="secondary back">← Services</button><div id="content" class="content"><p class="muted empty">Select a service to manage it.</p></div></div>
 </section>
 </main>
 <template id="service-view">
-<div class="toolbar wrap"><div><h2 class="title"></h2><p class="muted subtitle"></p></div><div class="actions"></div></div>
-<div class="tabs" role="tablist"><button data-tab="overview" role="tab">Overview</button><button data-tab="env" role="tab">Environment</button><button data-tab="secrets" role="tab">Secrets</button><button data-tab="settings" role="tab">Settings</button><button data-tab="logs" role="tab">Logs</button></div>
+<div class="toolbar wrap"><div class="heading"><h2 class="title"></h2><p class="muted subtitle"></p></div><div class="actions"></div></div>
+<div class="tabs" role="tablist"><button data-tab="overview" role="tab">Overview</button><button data-tab="env" role="tab">Environment</button><button data-tab="secrets" role="tab">Secrets</button><button data-tab="deploy" role="tab">Auto-deploy</button><button data-tab="settings" role="tab">Settings</button><button data-tab="logs" role="tab">Logs</button></div>
 <section data-panel="overview" class="panel"></section>
 <section data-panel="env" class="panel" hidden><form class="env-form"><p class="muted">Values are sensitive and hidden until revealed. Choose Text, File or Base64. Removing a row deletes that variable when you save.</p><div class="envs"></div><div class="toolbar"><button type="button" class="secondary add-env">+ Add variable</button><button type="submit" class="save-env">Save &amp; redeploy</button></div></form></section>
 <section data-panel="secrets" class="panel" hidden></section>
+<section data-panel="deploy" class="panel" hidden></section>
 <section data-panel="settings" class="panel" hidden></section>
 <section data-panel="logs" class="panel" hidden><div class="toolbar"><label class="inline">Lines <select class="tail"><option>100</option><option selected>200</option><option>500</option><option>1000</option></select></label><label class="inline"><input type="checkbox" class="follow"> Auto-refresh (10s)</label><button type="button" class="secondary small load-logs">Load logs</button></div><pre class="logs" tabindex="0">Click “Load logs”.</pre></section>
 </template>

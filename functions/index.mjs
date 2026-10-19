@@ -1,14 +1,17 @@
-import {createWebhookHandler} from '../webhook.mjs';
+import {createWebhookHandler, createDeliveryLog} from '../webhook.mjs';
+
+// One delivery history shared by the GitHub webhook and the console's Auto-deploy tab.
+const log = createDeliveryLog();
 
 export const githubWebhook = {
   method: 'post',
   path: '/github-webhook/:service',
   description: 'Restart a Swarm service when a signed default-branch push matches its Git clone URL',
-  onRequest: createWebhookHandler()
+  onRequest: createWebhookHandler({log})
 };
 
 import {configuredAdmin} from '../admin.mjs';
-const admin = configuredAdmin();
+const admin = configuredAdmin(process.env, {deliveryLog: log});
 const route = (method, path, onRequest) => ({method, path, onRequest});
 export const adminPage = route('get', '/admin', admin.page);
 export const adminScript = route('get', '/admin/app.js', admin.script);
@@ -27,5 +30,7 @@ export const adminUpdate = route('post', '/admin/api/services/:service', admin.u
 export const adminAction = route('post', '/admin/api/services/:service/actions', admin.action);
 export const adminTasks = route('get', '/admin/api/services/:service/tasks', admin.tasks);
 export const adminLogs = route('get', '/admin/api/services/:service/logs', admin.logs);
+export const adminWebhook = route('get', '/admin/api/services/:service/webhook', admin.webhook);
+export const adminWebhookAction = route('post', '/admin/api/services/:service/webhook', admin.webhookAction);
 export const adminSecrets = route('get', '/admin/api/services/:service/secrets', admin.secrets);
 export const adminCreateSecret = route('post', '/admin/api/services/:service/secrets', admin.createSecret);

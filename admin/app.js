@@ -73,10 +73,17 @@ function renderServices() {
     list.append(b);
   }
 }
+function showDetail(open) { $('workspace').classList.toggle('detail-open', open); if (open && matchMedia('(max-width: 900px)').matches) window.scrollTo({top: 0}); }
+$('back').onclick = () => { stopLogs(); state.selected = null; state.view = null; showDetail(false); setActive(); };
+async function copy(text, label) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { const t = mk('textarea', {value: text}); document.body.append(t); t.select(); document.execCommand('copy'); t.remove(); }
+  message(`${label} copied.`);
+}
 function setActive() { for (const b of document.querySelectorAll('.nav-item')) b.classList.toggle('active', b.dataset.view === state.view); renderServices(); }
 
 async function openView(view) {
-  stopLogs(); state.view = view; state.selected = null; setActive();
+  stopLogs(); state.view = view; state.selected = null; setActive(); showDetail(Boolean(view));
   const content = $('content'); content.replaceChildren();
   if (view === 'swarm') return renderSwarm(content);
   if (view === 'users') return renderUsers(content);
@@ -88,7 +95,7 @@ async function openView(view) {
 async function openService(id, tab = 'overview') {
   stopLogs();
   const s = await api('/services/' + encodeURIComponent(id));
-  state.selected = s; state.view = null; setActive();
+  state.selected = s; state.view = null; setActive(); showDetail(true);
   const content = $('content'); content.replaceChildren($('service-view').content.cloneNode(true));
   content.querySelector('.title').textContent = s.name;
   content.querySelector('.subtitle').textContent = `${s.image} · ${s.kind === 'control' ? 'management service' : s.project ? 'project ' + s.project : 'application'}`;
@@ -113,12 +120,15 @@ async function openService(id, tab = 'overview') {
     for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-selected', b.dataset.tab === name);
     for (const p of content.querySelectorAll('.panel')) p.hidden = p.dataset.panel !== name;
     if (name !== 'logs') stopLogs();
+    if (name === 'deploy') run(() => deploy.load());
+    const active = tabs.querySelector(`[data-tab="${name}"]`); tabs.scrollTo({left: active.offsetLeft - 16, behavior: 'smooth'});
   }
   renderOverview(content.querySelector('[data-panel=overview]'), s);
   renderEnv(content.querySelector('[data-panel=env]'), s);
   if (s.kind !== 'control') await renderSecrets(content.querySelector('[data-panel=secrets]'), s);
   renderSettings(content.querySelector('[data-panel=settings]'), s);
   renderLogs(content.querySelector('[data-panel=logs]'), s);
+  const deploy = renderDeploy(content.querySelector('[data-panel=deploy]'), s);
   showTab(tab);
 }
 
@@ -126,6 +136,7 @@ function renderOverview(panel, s) {
   const stats = mk('div', {className: 'stats'},
     mk('div', {className: 'stat'}, mk('b', {}, badge(s.kind === 'control' ? 'control' : s.status)), mk('span', {textContent: 'Status'})),
     mk('div', {className: 'stat'}, mk('b', {textContent: `${s.running} / ${s.replicas}`}), mk('span', {textContent: 'Running / desired replicas'})),
+    mk('div', {className: 'stat'}, mk('b', {}, badge({on: 'auto-deploy on', paused: 'paused', off: 'off'}[s.autoDeploy] || 'off', s.autoDeploy === 'on' ? 'running' : s.autoDeploy === 'paused' ? 'degraded' : 'archived')), mk('span', {textContent: 'GitHub auto-deploy'})),
     mk('div', {className: 'stat'}, mk('b', {textContent: s.cpus ? s.cpus + ' CPU' : 'unlimited'}), mk('span', {textContent: 'CPU limit'})),
     mk('div', {className: 'stat'}, mk('b', {textContent: s.memoryMB ? s.memoryMB + ' MB' : 'unlimited'}), mk('span', {textContent: 'Memory limit'})),
     mk('div', {className: 'stat'}, mk('b', {textContent: when(s.updatedAt)}), mk('span', {textContent: 'Last updated'})));
@@ -164,6 +175,56 @@ function renderSettings(panel, s) {
     await loadServices(); if (s.kind !== 'control') await openService(s.id, 'settings');
   }); };
   panel.append(form);
+}
+
+// ---------- Auto-deploy (GitHub webhook) ----------
+function renderDeploy(panel, s) {
+  let loaded = null;
+  const field = (label, value, {secret = false, copyLabel = label} = {}) => {
+    const out = mk('code', {className: 'value', textContent: secret ? '•'.repeat(24) : value});
+    const tools = mk('div', {className: 'field-tools'});
+    if (secret) { let shown = false; tools.append(mk('button', {type: 'button', className: 'secondary small', textContent: 'Reveal', onclick: e => { shown = !shown; out.textContent = shown ? value : '•'.repeat(24); e.target.textContent = shown ? 'Hide' : 'Reveal'; }})); }
+    tools.append(mk('button', {type: 'button', className: 'secondary small', textContent: 'Copy', onclick: () => run(() => copy(value, copyLabel))}));
+    return mk('div', {className: 'field'}, mk('span', {className: 'field-label', textContent: label}), mk('div', {className: 'field-row'}, out, tools));
+  };
+  async function act(action, confirmText) {
+    if (confirmText && !confirm(confirmText)) return;
+    const r = await api(`/services/${encodeURIComponent(s.id)}/webhook`, {action, version: loaded.version});
+    message(r.message); s.version = r.version; draw(r); loadServices();
+  }
+  function draw(w) {
+    loaded = w; panel.replaceChildren();
+    const status = !w.ready ? badge('not ready', 'error') : w.paused ? badge('paused', 'degraded') : badge('active', 'running');
+    panel.append(mk('div', {className: 'toolbar'}, mk('p', {className: 'lead'}, status, document.createTextNode(w.ready ? (w.paused ? ' Pushes are recorded but do not redeploy.' : ` Pushes to the default branch of ${w.repository} restart this service.`) : ' Fix the items below to enable auto-deploy.')),
+      mk('button', {type: 'button', className: 'secondary small', textContent: '↻ Refresh', onclick: () => run(load)})));
+    if (w.problems.length) panel.append(mk('ul', {className: 'problems'}, ...w.problems.map(p => mk('li', {textContent: p}))));
+    const card = mk('div', {className: 'card inset'}, mk('h3', {textContent: 'GitHub webhook settings'}),
+      mk('p', {className: 'muted', textContent: 'In the repository, open Settings → Webhooks → Add webhook (or edit the existing one) and use these values.'}),
+      field('Payload URL', w.url), field('Content type', w.contentType));
+    if (w.secret) card.append(field('Secret', w.secret, {secret: true}));
+    card.append(mk('div', {className: 'field'}, mk('span', {className: 'field-label', textContent: 'Events'}), mk('span', {textContent: 'Just the push event'})));
+    if (w.settingsUrl) card.append(mk('a', {className: 'button-link', href: w.settingsUrl, target: '_blank', rel: 'noopener', textContent: 'Open repository webhooks ↗'}));
+    if (w.sharedSecretAccepted) card.append(mk('p', {className: 'muted', textContent: 'Older hooks that use the shared webhook secret keep working. Switch them to this service secret when convenient.'}));
+    panel.append(card);
+    const buttons = mk('div', {className: 'actions'});
+    buttons.append(w.paused ? mk('button', {type: 'button', textContent: '▶ Resume auto-deploy', onclick: () => run(() => act('resume'))})
+      : mk('button', {type: 'button', className: 'secondary', textContent: '⏸ Pause auto-deploy', disabled: !w.ready, onclick: () => run(() => act('pause', `Pause auto-deploy for ${s.name}? Pushes will no longer restart it.`))}));
+    if (w.secret) buttons.append(mk('button', {type: 'button', className: 'danger', textContent: 'Rotate secret', onclick: () => run(() => act('rotate', 'Rotate the webhook secret? The current secret stops working immediately, so update GitHub right after.'))}));
+    if (s.replicas > 0) buttons.append(mk('button', {type: 'button', className: 'secondary', textContent: 'Deploy now', onclick: () => run(async () => {
+      if (!confirm(`Redeploy ${s.name} now? Git services fetch the latest default branch on start.`)) return;
+      const r = await api(`/services/${encodeURIComponent(s.id)}/actions`, {action: 'restart'}); message(r.message); await loadServices();
+    })}));
+    panel.append(buttons);
+    panel.append(mk('h3', {textContent: 'Recent deliveries'}), mk('p', {className: 'muted', textContent: `Kept in memory for the last 20 deliveries since the management service started.${w.signatureFailures.count ? ` ${w.signatureFailures.count} request(s) failed the signature check, last at ${when(w.signatureFailures.last)}. Check the secret in GitHub.` : ''}`}));
+    if (!w.deliveries.length) return panel.append(mk('p', {className: 'muted empty-small', textContent: 'No deliveries yet. GitHub sends a ping when the webhook is saved; use “Redeliver” in GitHub to test.'}));
+    const kind = {deployed: 'running', ping: 'ready', paused: 'degraded', ignored: 'archived', rejected: 'error', failed: 'error'};
+    panel.append(mk('ul', {className: 'deliveries'}, ...w.deliveries.map(d => mk('li', {className: 'delivery'},
+      mk('div', {className: 'delivery-head'}, badge(d.result, kind[d.result] || d.result), mk('span', {className: 'muted', textContent: when(d.at)}), d.branch ? mk('span', {className: 'chip', textContent: d.branch}) : null),
+      d.commit ? mk('div', {className: 'commit'}, d.commit.url ? mk('a', {href: d.commit.url, target: '_blank', rel: 'noopener', textContent: d.commit.id.slice(0, 7)}) : mk('code', {textContent: d.commit.id.slice(0, 7)}), document.createTextNode(' ' + d.commit.message)) : null,
+      mk('div', {className: 'muted', textContent: [d.reason, d.pusher || d.commit?.author ? `by ${d.pusher || d.commit.author}` : '', d.secret === 'shared' ? 'shared secret' : ''].filter(Boolean).join(' · ')})))));
+  }
+  async function load() { panel.replaceChildren(mk('p', {className: 'muted', textContent: 'Loading…'})); draw(await api(`/services/${encodeURIComponent(s.id)}/webhook`)); }
+  return {load};
 }
 
 // ---------- Environment editor ----------

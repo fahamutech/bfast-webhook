@@ -1,5 +1,6 @@
 // Service classification, read models and Swarm spec builders.
 import {fail} from './docker.mjs';
+import {repositoryFromCloneUrl, pausedLabel} from './webhook.mjs';
 
 export const projectLabel = 'bfast.project';
 const env = list => Object.fromEntries((list || []).map(entry => {
@@ -37,7 +38,14 @@ export function serviceSummary(service, tasks = [], kind = 'app') {
     status: replicas === 0 ? 'archived' : running >= (replicas ?? 1) ? 'running' : running > 0 ? 'degraded' : 'starting',
     project: spec.Labels?.[projectLabel] || variables.PROJECT_ID || null, hosts,
     gitCloneUrl: variables.GIT_CLONE_URL || null, modeEnv: variables.MODE || null,
+    autoDeploy: autoDeployState(variables, spec.Labels),
     createdAt: service.CreatedAt, updatedAt: service.UpdatedAt, version: service.Version?.Index};
+}
+
+// 'on' when a GitHub push can redeploy the service, 'paused' when switched off, 'off' when not a Git service.
+export function autoDeployState(variables, labels) {
+  if ((variables.MODE?.trim() || 'git') !== 'git' || !repositoryFromCloneUrl(variables.GIT_CLONE_URL)) return 'off';
+  return labels?.[pausedLabel] === 'true' ? 'paused' : 'on';
 }
 
 export function serviceDetail(service) {
