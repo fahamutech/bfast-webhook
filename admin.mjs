@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {dockerRequest, demuxLogs, filters, fail} from './docker.mjs';
 import {createFirebaseVerifier, createSessions, parseAccess, serializeUsers, usersInput, normalizeEmail, validEmail} from './auth.mjs';
-import {classify, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv, parseImages} from './services.mjs';
+import {classify, parseMountRoots, placementChanges, serviceSummary, serviceDetail, taskSummary, updatedSpec, actionSpec, newServiceSpec, nodeSummary, checkEnv, parseImages} from './services.mjs';
 import {secretReference, secretChoices, newSecret, secretAttachments} from './secrets.mjs';
 import {serviceWebhookSecret, webhookGeneration, generationLabel, pausedLabel, repositoryFromCloneUrl, createDeliveryLog} from './webhook.mjs';
 
@@ -12,7 +12,7 @@ const withUsers = (list, users) => { const serialized = serializeUsers(users); r
 const envMap = list => Object.fromEntries((list || []).map(e => { const i = e.indexOf('='); return i < 0 ? [e, ''] : [e.slice(0, i), e.slice(i + 1)]; }));
 const asset = file => readFileSync(new URL(`./admin/${file}`, import.meta.url), 'utf8');
 
-export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], verifyIdToken, firebaseConfig = defaultFirebaseConfig,
+export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded = [], allowedMountRoots = '', verifyIdToken, firebaseConfig = defaultFirebaseConfig,
   adminEmails = '', serviceUsers = '', selfName = 'webhook', cluster = '', hostDomain = '',
   defaultImage = 'joshuamshana/bfastfunction:latest', allowedImages = '', sessionMinutes = 60, sessionMaxHours = 12, contactEmail = 'mama27j@gmail.com', webhookSecret = '', acceptSharedSecret = true, deliveryLog = createDeliveryLog(),
   now = () => Date.now()} = {}) {
@@ -53,6 +53,7 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     return false;
   }
   const options = () => ({excluded, selfName});
+  const mountRoots = parseMountRoots(allowedMountRoots);
 
   // Access policy lives in this service's own environment; read it live so user changes apply before the restart lands.
   async function loadAccess(force = false) {
@@ -183,9 +184,11 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     detail: wrap(async (req, res, u) => {
       const service = await inspect(req.params.service, u);
       const [tasks, nodes] = await Promise.all([tasksFor([service.ID]), nodeNames()]);
+      const nodeOptions = u.role === 'admin' && service.kind !== 'control' ? [...nodes.values()].sort() : [];
       const summary = serviceSummary(service, tasks.filter(t => t.DesiredState === 'running'), service.kind);
       const current = service.Spec.TaskTemplate.ContainerSpec.Image;
       res.json({...serviceDetail(service), ...summary, kind: service.kind, canEditSettings: u.role === 'admin',
+        canEditPlacement: u.role === 'admin' && service.kind !== 'control', nodeOptions, mountRoots: u.role === 'admin' ? mountRoots : [],
         imageOptions: u.role === 'admin' ? [...new Set([current, ...u.images])] : [],
         users: u.role === 'admin' ? [...u.access.users.entries()].filter(([, s]) => s.has(service.Spec.Name)).map(([email]) => email) : undefined,
         secrets: (service.Spec.TaskTemplate.ContainerSpec.Secrets || []).map(secretReference),
@@ -206,7 +209,13 @@ export function createAdmin({jwtSecret, origin, docker = dockerRequest, excluded
     update: wrap(locked(async (req, res, u) => {
       if ((JSON.stringify(req.body) || '').length > 1048576) throw fail(413, 'Settings too large');
       const service = await inspect(req.params.service, u);
-      const spec = updatedSpec(service, req.body, {allowImage: u.role === 'admin'});
+      // Placement, storage, hostnames and rollout order are administrator settings. Values sent back unchanged are ignored.
+      const changed = placementChanges(service, req.body);
+      if (changed.length) {
+        if (u.role !== 'admin') throw fail(403, 'Only administrators can change placement, storage, hostnames or the rollout order');
+        if (service.kind === 'control') throw fail(400, 'Placement and storage of the management service cannot be changed here');
+      }
+      const spec = updatedSpec(service, req.body, {allowImage: u.role === 'admin', mountRoots});
       // Resource allocation and images are administrator decisions; users may only resend the current values.
       if (u.role !== 'admin') {
         const now = serviceDetail(service);
@@ -341,5 +350,5 @@ export function configuredAdmin(env = process.env, {deliveryLog} = {}) {
     cluster: env.SWARM_CLUSTER || '', hostDomain: env.SWARM_HOST_DOMAIN || '', defaultImage: env.DEFAULT_IMAGE || 'joshuamshana/bfastfunction:latest', allowedImages: env.ALLOWED_IMAGES || '',
     sessionMinutes: Math.min(720, Math.max(5, Number(env.SESSION_MINUTES) || 60)), sessionMaxHours: Math.min(168, Math.max(1, Number(env.SESSION_MAX_HOURS) || 12)), contactEmail: env.SITE_CONTACT_EMAIL || 'mama27j@gmail.com',
     webhookSecret: env.WEBHOOK_SECRET_FILE ? readFileSync(env.WEBHOOK_SECRET_FILE, 'utf8').trim() : '', acceptSharedSecret: env.WEBHOOK_ACCEPT_SHARED_SECRET !== 'false', deliveryLog,
-    excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean)});
+    excluded: (env.ADMIN_EXCLUDED_SERVICES || '').split(',').map(s => s.trim()).filter(Boolean), allowedMountRoots: env.ADMIN_ALLOWED_MOUNT_ROOTS || ''});
 }

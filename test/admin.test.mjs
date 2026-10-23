@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import express from 'express';
 import {request} from 'node:http';
 import {createAdmin} from '../admin.mjs';
-import {classify, updatedSpec, serviceDetail, actionSpec, newServiceSpec} from '../services.mjs';
+import {classify, updatedSpec, serviceDetail, actionSpec, newServiceSpec, checkConstraints, checkMounts, parseMountRoots} from '../services.mjs';
 import {parseAccess, serializeUsers} from '../auth.mjs';
 import {demuxLogs} from '../docker.mjs';
 import {createDeliveryLog, serviceWebhookSecret} from '../webhook.mjs';
@@ -17,7 +17,7 @@ webhook.Spec.TaskTemplate.ContainerSpec.Env = ['WEBHOOK_SECRET_FILE=/run/secrets
 webhook.Spec.TaskTemplate.ContainerSpec.Secrets = [{SecretID:'manager-key'}];
 const traefik = structuredClone(service); traefik.ID = 'tr'; traefik.Spec.Name = 'bfast_traefik'; traefik.Spec.Mode = {Global:{}}; traefik.Spec.TaskTemplate.ContainerSpec.Secrets = [];
 
-async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtoken: {email: dev, name: 'Dev'}, nobody: {email: 'nobody@example.com', name: 'Nobody'}}} = {}) {
+async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtoken: {email: dev, name: 'Dev'}, nobody: {email: 'nobody@example.com', name: 'Nobody'}}, allowedMountRoots = ''} = {}) {
   const calls = []; let clock = Date.now();
   const services = [structuredClone(service), structuredClone(other), structuredClone(webhook), structuredClone(traefik)];
   const secrets = [{ID:'keep',Spec:{Name:'existing'}},{ID:'manager-key',Spec:{Name:'manager-key',Labels:{'bfast.admin.service':'abc123'}}},{ID:'other-key',Spec:{Name:'other-key',Labels:{'bfast.admin.service':'other-service'}}}];
@@ -41,7 +41,7 @@ async function setup(t, {accounts = {good: {email: admin, name: 'Admin'}, devtok
     throw new Error('unexpected ' + method + ' ' + path);
   };
   const deliveryLog = createDeliveryLog();
-  const make = () => createAdmin({jwtSecret:'x'.repeat(40), origin, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com', webhookSecret:'master-secret', deliveryLog,
+  const make = () => createAdmin({jwtSecret:'x'.repeat(40), origin, allowedMountRoots, now:() => clock, docker, adminEmails: admin, cluster:'bfast', hostDomain:'example.com', webhookSecret:'master-secret', deliveryLog,
     verifyIdToken: async token => { const a = accounts[token]; if (!a) throw Object.assign(new Error('bad token'),{status:401}); return {...a, picture:null}; }});
   let current = make(); const api = new Proxy({}, {get: (_, k) => (req, res) => current[k](req, res)});
   const app = express(); app.use(express.json({limit:'1mb'}));
@@ -339,4 +339,71 @@ test('admins can end another user\'s sessions; users cannot',async t => {
   assert.equal((await s.send('/session',undefined,{cookie:devCookie})).status,401);
   assert.equal((await s.send('/session',undefined,{cookie:cookieOf(adm)})).status,200);
   s.advance(1000); assert.equal((await s.login('devtoken')).status,200);
+});
+
+test('placement constraints accept node selectors and reject anything else',() => {
+  assert.deepEqual(checkConstraints(['node.hostname == vmi1.example.net','node.role==manager','node.labels.zone==eu','node.role==manager']),['node.hostname==vmi1.example.net','node.role==manager','node.labels.zone==eu']);
+  for (const bad of ['node.hostname','role==manager','node.role=manager','node.hostname==a b','$(rm)==x','node.hostname==']) assert.throws(()=>checkConstraints([bad]),/Unsupported constraint/);
+  assert.throws(()=>checkConstraints('node.role==manager'));
+  assert.throws(()=>checkConstraints(Array.from({length:11},(_,i)=>`node.labels.k${i}==v`)));
+});
+test('storage mounts: host folders need ADMIN_ALLOWED_MOUNT_ROOTS and stay away from the system, the Docker socket and secrets',() => {
+  const roots=parseMountRoots(' /var/lib/zebra , /srv/data,/ ,relative');
+  assert.deepEqual(roots,['/var/lib/zebra','/srv/data']);
+  const folder={type:'volume',source:'zebra_store',hostPath:'/var/lib/zebra/store/',target:'/data/zebra-store'};
+  assert.deepEqual(checkMounts([folder],{roots}),[{Type:'volume',Target:'/data/zebra-store',ReadOnly:false,Source:'zebra_store',VolumeOptions:{DriverConfig:{Name:'local',Options:{type:'none',o:'bind',device:'/var/lib/zebra/store'}}}}]);
+  assert.deepEqual(checkMounts([{type:'bind',source:'/srv/data',target:'/in',readOnly:true}],{roots}),[{Type:'bind',Target:'/in',ReadOnly:true,Source:'/srv/data'}]);
+  assert.deepEqual(checkMounts([{type:'volume',source:'plain',target:'/p'}]),[{Type:'volume',Target:'/p',ReadOnly:false,Source:'plain'}],'a plain Docker volume needs no host access');
+  assert.throws(()=>checkMounts([folder]),/disabled/);
+  for (const hostPath of ['/etc','/etc/ssh','/var/run/docker.sock','/srv/data/../../etc','/srv/dataX','/home/me','/srv/data/.ssh','relative','/srv/da ta']) assert.throws(()=>checkMounts([{type:'bind',source:hostPath,target:'/x'}],{roots}),hostPath);
+  for (const target of ['/proc/x','/sys','/dev/sda','/var/run/docker.sock','x','/a/../b']) assert.throws(()=>checkMounts([{type:'volume',source:'v',target}],{roots}),target);
+  assert.throws(()=>checkMounts([{type:'volume',source:'a',target:'/x'},{type:'volume',source:'b',target:'/x'}]),/Two mounts/);
+  assert.throws(()=>checkMounts([{type:'volume',source:'bad name',target:'/x'}]));
+  assert.throws(()=>checkMounts([{type:'tmpfs',target:'/x'}]));
+  assert.throws(()=>checkMounts([{type:'volume',source:'v',target:'/x',extra:1}]));
+});
+test('administrators pin a service, mount a host folder, change domains and the rollout order from the console',async t => {
+  const s=await setup(t,{allowedMountRoots:'/var/lib/zebra'});
+  await s.login();
+  const detail=(await s.send('/services/abc123')).data;
+  assert.equal(detail.canEditPlacement,true); assert.deepEqual(detail.nodeOptions,['manager-1']); assert.deepEqual(detail.mountRoots,['/var/lib/zebra']);
+  assert.deepEqual(detail.mounts,[]); assert.equal(detail.updateOrder,'stop-first');
+  const body={...input(service),constraints:['node.hostname==manager-1'],hosts:['Zebra.Example.com','zebra-faas.example.com'],updateOrder:'start-first',updateParallelism:2,
+    mounts:[{type:'volume',source:'zebra_store',hostPath:'/var/lib/zebra/store',target:'/data/zebra-store'}]};
+  assert.equal((await s.send('/services/abc123',{...body,version:7})).status,200);
+  const saved=s.services[0].Spec;
+  assert.deepEqual(saved.TaskTemplate.Placement.Constraints,['node.hostname==manager-1']);
+  assert.equal(saved.TaskTemplate.ContainerSpec.Mounts[0].VolumeOptions.DriverConfig.Options.device,'/var/lib/zebra/store');
+  assert.equal(saved.Labels['traefik.http.routers.example-faas.rule'],'Host(`zebra.example.com`) || Host(`zebra-faas.example.com`)');
+  assert.equal(saved.Labels.keep,'yes'); assert.deepEqual(saved.UpdateConfig,{Order:'start-first',Parallelism:2});
+  assert.equal(saved.Labels['bfast.managed'],undefined,'a hostname pin and a volume keep the service manageable without the label');
+  const again=(await s.send('/services/abc123')).data;
+  assert.deepEqual(again.mounts,[{type:'volume',source:'zebra_store',hostPath:'/var/lib/zebra/store',target:'/data/zebra-store',readOnly:false}]);
+  s.reset(); await s.login();
+  assert.equal((await s.send('/services/abc123',{...input(s.services[0]),version:8,constraints:again.constraints,mounts:again.mounts,hosts:again.hosts,updateOrder:again.updateOrder})).status,200);
+});
+test('pinning to the manager keeps the service visible by adding bfast.managed; the Docker socket is refused',async t => {
+  const s=await setup(t,{allowedMountRoots:'/var/lib/zebra'});
+  await s.login();
+  assert.equal((await s.send('/services/abc123',{...input(service),constraints:['node.role==manager'],mounts:[{type:'bind',source:'/var/lib/zebra/store',target:'/data'}]})).status,200);
+  const saved=s.services[0].Spec;
+  assert.equal(saved.Labels['bfast.managed'],'true'); assert.equal(classify(s.services[0]),'app');
+  assert.equal((await s.send('/services/abc123',{...input(s.services[0]),version:8,mounts:[{type:'bind',source:'/var/run/docker.sock',target:'/s'}]})).status,400);
+  assert.equal((await s.send('/services/abc123',{...input(s.services[0]),version:8,mounts:[{type:'bind',source:'/etc',target:'/host'}]})).status,400);
+});
+test('placement changes are refused without a configured root, for non-admins and for the management service',async t => {
+  const s=await setup(t);
+  await s.login();
+  const hostFolder={type:'volume',source:'v',hostPath:'/var/lib/zebra',target:'/data'};
+  const refused=await s.send('/services/abc123',{...input(service),mounts:[hostFolder]});
+  assert.equal(refused.status,400); assert.match(JSON.stringify(refused.data),/ADMIN_ALLOWED_MOUNT_ROOTS/);
+  assert.equal((await s.send('/services/abc123',{...input(service),hosts:['not a host']})).status,400);
+  assert.equal((await s.send('/services/abc123',{...input(service),updateOrder:'sideways'})).status,400);
+  assert.equal((await s.send('/services/abc123',{...input(service),constraints:['rm -rf']})).status,400);
+  assert.equal((await s.send('/services/control',{...input(webhook),constraints:['node.role==worker']})).status,400);
+  s.reset(); await s.login('devtoken');
+  assert.equal((await s.send('/services/abc123',{...input(service),constraints:['node.role==worker']})).status,403);
+  assert.equal((await s.send('/services/abc123',{...input(service),updateOrder:'start-first'})).status,403);
+  assert.equal((await s.send('/services/abc123',{...input(service)})).status,200,'users can still save when the placement settings are unchanged');
+  assert.equal((await s.send('/services/abc123')).data.canEditPlacement,false);
 });
