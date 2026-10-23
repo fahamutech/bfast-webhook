@@ -233,6 +233,19 @@ test('classification protects control labels, admin env, bind mounts, manager co
   assert.equal(classify(service),'app'); assert.equal(classify(service,{excluded:['example_faas']}),'protected'); assert.equal(classify(webhook),'control'); assert.equal(classify(webhook,{selfName:'manager'}),'protected');
   for(const mutate of [s=>s.Spec.Labels['bfast.control']='true',s=>s.Spec.Labels['bfast.app']='bfast',s=>s.Spec.TaskTemplate.ContainerSpec.Env.push('PROJECT_ID=_BFAST_ADMIN'),s=>s.Spec.TaskTemplate.ContainerSpec.Mounts=[{Type:'bind',Source:'/var/run/docker.sock'}],s=>s.Spec.TaskTemplate.Placement={Constraints:['node.role == manager']},s=>s.Spec.Mode={Global:{}}]) {const s=structuredClone(service);mutate(s);assert.equal(classify(s),'protected');}
 });
+test('bfast.managed=true lets a pinned service with a bind mount be managed, but never the Docker socket',() => {
+  const pinned = structuredClone(service);
+  pinned.Spec.TaskTemplate.ContainerSpec.Mounts=[{Type:'bind',Source:'/root/zebra-store',Target:'/data/zebra-store'}];
+  pinned.Spec.TaskTemplate.Placement={Constraints:['node.role==manager']};
+  assert.equal(classify(pinned),'protected');
+  pinned.Spec.Labels['bfast.managed']='true';
+  assert.equal(classify(pinned),'app');
+  const spec=updatedSpec(pinned,input(pinned));
+  assert.deepEqual(spec.TaskTemplate.ContainerSpec.Mounts,pinned.Spec.TaskTemplate.ContainerSpec.Mounts,'saving keeps the mount');
+  assert.deepEqual(spec.TaskTemplate.Placement,pinned.Spec.TaskTemplate.Placement,'saving keeps the constraint');
+  pinned.Spec.TaskTemplate.ContainerSpec.Mounts.push({Type:'bind',Source:'/var/run/docker.sock',Target:'/var/run/docker.sock'});
+  assert.equal(classify(pinned),'protected');
+});
 test('secret creation is authenticated, scoped and write-only; attachments reject foreign credentials',async t => {
   const s=await setup(t);
   assert.equal((await s.send('/services/abc123/secrets')).status,401);

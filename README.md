@@ -177,6 +177,7 @@ Infrastructure is **protected** and read-only for everyone: global services,
 services with bind mounts or manager-only constraints, names containing
 `webhook`, `traefik`, `bfast` or `control` components, `bfast.app=bfast`,
 `bfast.control=true`, `PROJECT_ID=_BFAST_ADMIN`, and `ADMIN_EXCLUDED_SERVICES`.
+A stateful service that is pinned to a node can opt in with the label `bfast.managed=true`: its bind mounts and manager constraint are then allowed and preserved on save (the Docker socket never is).
 Add `bfast.control=true` to any other infrastructure service before exposing
 the console.
 

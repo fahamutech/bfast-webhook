@@ -10,16 +10,22 @@ const env = list => Object.fromEntries((list || []).map(entry => {
 
 // 'app': editable application service. 'control': this management service itself.
 // 'protected': infrastructure (Traefik, BFast API, bind mounts, manager-only, global) — read-only.
+// A service that must keep local state (a bind mount, or a manager constraint) can opt in to being managed here
+// with the label bfast.managed=true. Editing it keeps its mounts and constraints; the Docker socket is never allowed.
+export const managedLabel = 'bfast.managed';
 export function classify(service, {excluded = [], selfName = 'webhook'} = {}) {
   const spec = service.Spec || {}, task = spec.TaskTemplate || {}, container = task.ContainerSpec || {};
   const name = spec.Name || '';
   if (name && name === selfName) return 'control';
+  const optedIn = spec.Labels?.[managedLabel] === 'true';
+  const mounts = container.Mounts || [];
   const editable = Boolean(spec.Mode?.Replicated && !excluded.includes(name)
     && !/(^|_)(webhook|traefik|bfast|control)(_|$)/i.test(name)
     && spec.Labels?.['bfast.control'] !== 'true' && spec.Labels?.['bfast.app'] !== 'bfast'
     && !(container.Env || []).includes('PROJECT_ID=_BFAST_ADMIN')
-    && !(container.Mounts || []).some(m => m.Type === 'bind')
-    && !(task.Placement?.Constraints || []).some(c => /node\.role\s*==\s*manager/i.test(c)));
+    && !mounts.some(m => /docker\.sock/.test(m.Source || m.Target || ''))
+    && (optedIn || !mounts.some(m => m.Type === 'bind'))
+    && (optedIn || !(task.Placement?.Constraints || []).some(c => /node\.role\s*==\s*manager/i.test(c))));
   return editable ? 'app' : 'protected';
 }
 export const isEditable = (service, excluded = []) => classify(service, {excluded, selfName: '\0'}) === 'app';
