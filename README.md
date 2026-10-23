@@ -151,6 +151,7 @@ cookie. No service account is required. To use another Firebase project set
 | `ALLOWED_IMAGES` | no | Comma-separated images administrators may pick for new or existing services, e.g. `joshuamshana/bfastfunction:latest,joshuamshana/bfastfunction:3.2.4`. Read live from the management service's environment. When unset, images are read-only and new services use `DEFAULT_IMAGE` |
 | `SELF_SERVICE_NAME` | no | Swarm name of this service (default `webhook`), used to store users and to manage itself |
 | `ADMIN_EXCLUDED_SERVICES` | no | Comma-separated service names to hide from everyone |
+| `ADMIN_ALLOWED_MOUNT_ROOTS` | no | Comma-separated host folders administrators may mount into services, e.g. `/var/lib/zebra,/srv/data`. Empty (the default) disables host folder mounts. System paths, `.ssh` and the Docker socket are always refused |
 | `FIREBASE_WEB_CONFIG` | no | JSON web config of an alternative Firebase project |
 | `SESSION_MINUTES` | no | Session cookie lifetime, renewed while in use (default `60`, 5–720) |
 | `SESSION_MAX_HOURS` | no | Absolute session limit before signing in again (default `12`, 1–168) |
@@ -180,6 +181,24 @@ services with bind mounts or manager-only constraints, names containing
 A stateful service that is pinned to a node can opt in with the label `bfast.managed=true`: its bind mounts and manager constraint are then allowed and preserved on save (the Docker socket never is).
 Add `bfast.control=true` to any other infrastructure service before exposing
 the console.
+
+### Placement, storage and domains (administrators)
+
+An application service's **Settings** tab has a **Placement, storage and rollout**
+section, so services that keep data on disk no longer need the Docker command line:
+
+- **Run only on**: placement constraints such as `node.hostname==my-server`,
+  `node.role==manager` or `node.labels.zone==eu`, with a node picker.
+- **Domains**: the hostnames in the service's Traefik router rule. Point their DNS at the server first.
+- **Storage**: a *Host folder* (a named volume backed by a folder on the server), a plain *Docker volume*, or a
+  *Direct bind*. Host folders must be inside `ADMIN_ALLOWED_MOUNT_ROOTS`, and the container user must own the folder
+  on the server (`chown -R <uid>:<gid> <folder>`). Mounts and constraints are saved with the rest of the service, and
+  a service that ends up pinned to the manager or with a bind mount gets `bfast.managed=true` automatically so it stays visible.
+- **When redeploying**: stop the old copy first (one writer at a time, right for services that own a data folder) or
+  start the new copy first (no downtime).
+
+Only administrators can change these, and the console never edits them for the management service itself.
+Values sent back unchanged are ignored, so a service whose mounts were created on the command line can still be saved.
 
 ### Managing the management service
 

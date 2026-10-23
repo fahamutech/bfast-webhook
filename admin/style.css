@@ -113,3 +113,7 @@ body.signed-out #message:not(.error) span{background:rgba(62,230,164,.12);color:
 .login-screen :focus-visible{outline:2px solid #3ee6a4;outline-offset:3px}
 @media (prefers-reduced-motion:reduce){.login-card,.login-eyebrow .pulse{animation:none}}
 .admin-list{margin:12px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;display:grid;gap:8px}.admin-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;overflow-wrap:anywhere}.row-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:start}
+
+.placement{margin:24px 0;padding:16px;border:1px solid var(--line);border-radius:8px}.placement h3{margin:0 0 12px;font-size:15px}.placement h4{margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.mount-row{display:grid;grid-template-columns:150px minmax(120px,1fr) minmax(160px,1.5fr) minmax(110px,1fr) auto auto;gap:10px;align-items:start}.mount-row input,.mount-row select{margin:0}.mount-row label.inline{margin-top:10px;white-space:nowrap}.mounts{margin-bottom:12px}.mounts .mount-row{margin-bottom:10px}
+@media(max-width:900px){.mount-row{grid-template-columns:minmax(0,1fr)}}

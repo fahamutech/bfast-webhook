@@ -63,6 +63,8 @@ export function serviceDetail(service) {
     memoryMB: (t.Resources?.Limits?.MemoryBytes || 0) / 1048576,
     restart: t.RestartPolicy?.Condition || 'any',
     labels: service.Spec.Labels || {}, constraints: t.Placement?.Constraints || [],
+    mounts: (t.ContainerSpec.Mounts || []).filter(m => ['bind', 'volume'].includes(m.Type)).map(mountSummary),
+    updateOrder: service.Spec.UpdateConfig?.Order || 'stop-first', updateParallelism: service.Spec.UpdateConfig?.Parallelism ?? 1,
     networks: (t.Networks || []).map(n => n.Target)};
 }
 
@@ -93,8 +95,82 @@ export function checkDeployment(input) {
     || !['any', 'on-failure', 'none'].includes(input.restart)) throw fail(400, 'Invalid deployment settings');
 }
 
-export function updatedSpec(service, input, {allowImage = false} = {}) {
-  const allowed = ['version', 'env', 'replicas', 'cpus', 'memoryMB', 'restart', 'secrets', ...(allowImage ? ['image'] : [])];
+// ---------- placement, storage and rollout: administrator settings ----------
+const constraintPattern = /^(node\.(id|hostname|role|platform\.os|platform\.arch)|node\.labels\.[A-Za-z0-9_.-]{1,100}|engine\.labels\.[A-Za-z0-9_.-]{1,100})(==|!=)[A-Za-z0-9_.:\/@-]{1,200}$/;
+export function checkConstraints(list) {
+  if (!Array.isArray(list) || list.length > 10) throw fail(400, 'Invalid placement constraints');
+  const out = list.map(c => {
+    const clean = typeof c === 'string' ? c.replace(/\s*(==|!=)\s*/, '$1').trim() : '';
+    if (!constraintPattern.test(clean)) throw fail(400, `Unsupported constraint "${String(c).slice(0, 80)}". Use node.hostname==name, node.role==manager, or node.labels.key==value`);
+    return clean;
+  });
+  return [...new Set(out)];
+}
+
+// ADMIN_ALLOWED_MOUNT_ROOTS=/var/lib,/srv — host folders services may mount. Empty means host mounts are disabled.
+const cleanPath = (value, what) => {
+  if (typeof value !== 'string' || !value.startsWith('/') || value.length > 255 || /[\0\s]/.test(value) || value.split('/').includes('..')) throw fail(400, `${what} must be an absolute path without spaces or ..`);
+  const path = value.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1');
+  return path;
+};
+export const parseMountRoots = value => [...new Set(String(value || '').split(/[\s,]+/).filter(Boolean).map(r => { try { return cleanPath(r, 'Mount root'); } catch { return null; } }).filter(r => r && r !== '/'))];
+const deniedHostPaths = [/^\/$/, /^\/(etc|boot|proc|sys|dev|run|bin|sbin|usr|lib|lib64|var\/run)(\/|$)/, /docker\.sock/, /(^|\/)\.(ssh|docker|aws|gnupg|kube)(\/|$)/];
+const underRoot = (path, roots) => roots.some(r => path === r || path.startsWith(r + '/'));
+function checkHostPath(value, roots) {
+  const path = cleanPath(value, 'Host folder');
+  if (!roots.length) throw fail(400, 'Host folder mounts are disabled. Set ADMIN_ALLOWED_MOUNT_ROOTS on the management service to the folders services may use.');
+  if (deniedHostPaths.some(re => re.test(path))) throw fail(400, `${path} cannot be mounted`);
+  if (!underRoot(path, roots)) throw fail(400, `${path} is outside ADMIN_ALLOWED_MOUNT_ROOTS (${roots.join(', ')})`);
+  return path;
+}
+export function checkMounts(list, {roots = []} = {}) {
+  if (!Array.isArray(list) || list.length > 10) throw fail(400, 'Invalid storage mounts');
+  const targets = new Set();
+  return list.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(k => !['type', 'source', 'hostPath', 'target', 'readOnly'].includes(k))) throw fail(400, 'Invalid mount');
+    if (!['bind', 'volume'].includes(item.type)) throw fail(400, 'Mount type must be bind or volume');
+    const target = cleanPath(item.target, 'Container path');
+    if (/^\/(proc|sys|dev)(\/|$)/.test(target) || /docker\.sock/.test(target)) throw fail(400, `${target} cannot be a mount target`);
+    if (targets.has(target)) throw fail(400, `Two mounts use ${target}`);
+    targets.add(target);
+    if (item.readOnly !== undefined && typeof item.readOnly !== 'boolean') throw fail(400, 'readOnly must be true or false');
+    const mount = {Type: item.type, Target: target, ReadOnly: item.readOnly === true};
+    if (item.type === 'bind') mount.Source = checkHostPath(item.source, roots);
+    else {
+      if (typeof item.source !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(item.source)) throw fail(400, 'Volume names use letters, numbers, dots, dashes and underscores');
+      mount.Source = item.source;
+      if (item.hostPath) mount.VolumeOptions = {DriverConfig: {Name: 'local', Options: {type: 'none', o: 'bind', device: checkHostPath(item.hostPath, roots)}}};
+    }
+    return mount;
+  });
+}
+export const mountSummary = mount => {
+  const options = mount.VolumeOptions?.DriverConfig?.Options;
+  return {type: mount.Type, source: mount.Source || '', hostPath: options?.o?.includes('bind') ? options.device : undefined, target: mount.Target, readOnly: Boolean(mount.ReadOnly)};
+};
+
+export const routerRuleKey = labels => Object.keys(labels || {}).find(k => /^traefik\.http\.routers\.[^.]+\.rule$/.test(k));
+export function checkHosts(list) {
+  if (!Array.isArray(list) || list.length < 1 || list.length > 20 || list.some(h => typeof h !== 'string' || !validHost(h.trim().toLowerCase()))) throw fail(400, 'Provide 1 to 20 valid hostnames');
+  return [...new Set(list.map(h => h.trim().toLowerCase()))];
+}
+export const hostRule = hosts => hosts.map(h => `Host(\`${h}\`)`).join(' || ');
+export const PLACEMENT_KEYS = ['constraints', 'mounts', 'hosts', 'updateOrder', 'updateParallelism'];
+// The placement settings a request really changes. Values sent back as they already are count as no change, so a
+// service whose mounts were set up on the command line can still be saved from the console.
+export function placementChanges(service, input) {
+  const current = {...serviceDetail(service), hosts: serviceSummary(service, [], 'app').hosts};
+  const canon = {
+    constraints: list => (Array.isArray(list) ? list : []).map(c => String(c).replace(/\s*(==|!=)\s*/, '$1').trim()),
+    hosts: list => (Array.isArray(list) ? list : []).map(h => String(h).trim().toLowerCase()),
+    mounts: list => (Array.isArray(list) ? list : []).map(m => ({type: m?.type, source: m?.source || '', hostPath: m?.hostPath || undefined, target: m?.target, readOnly: m?.readOnly === true}))
+  };
+  const same = (k, a, b) => JSON.stringify(canon[k] ? canon[k](a) : a) === JSON.stringify(canon[k] ? canon[k](b) : b);
+  return PLACEMENT_KEYS.filter(k => input?.[k] !== undefined && !same(k, input[k], current[k]));
+}
+
+export function updatedSpec(service, input, {allowImage = false, mountRoots = []} = {}) {
+  const allowed = ['version', 'env', 'replicas', 'cpus', 'memoryMB', 'restart', 'secrets', ...PLACEMENT_KEYS, ...(allowImage ? ['image'] : [])];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed.includes(k))) throw fail(400, 'Unsupported settings');
   if (!Number.isSafeInteger(input.version) || input.version !== service.Version.Index) throw fail(409, 'Service changed. Reload before saving.');
   checkEnv(input.env);
@@ -109,8 +185,41 @@ export function updatedSpec(service, input, {allowImage = false} = {}) {
   t.Resources.Limits.NanoCPUs = Math.round(input.cpus * 1e9);
   t.Resources.Limits.MemoryBytes = Math.round(input.memoryMB * 1048576);
   t.RestartPolicy = {...t.RestartPolicy, Condition: input.restart};
+  applyPlacement(spec, {...input, ...Object.fromEntries(PLACEMENT_KEYS.filter(k => !placementChanges(service, input).includes(k)).map(k => [k, undefined]))}, mountRoots);
   t.ForceUpdate = (t.ForceUpdate || 0) + 1;
   return spec;
+}
+
+// Applies the optional placement, storage, domain and rollout settings. Fields left out stay as they are.
+function applyPlacement(spec, input, mountRoots) {
+  const t = spec.TaskTemplate;
+  if (input.constraints !== undefined) {
+    const constraints = checkConstraints(input.constraints);
+    t.Placement = {...t.Placement, Constraints: constraints};
+    if (!constraints.length) delete t.Placement.Constraints;
+  }
+  if (input.mounts !== undefined) {
+    const kept = (t.ContainerSpec.Mounts || []).filter(m => !['bind', 'volume'].includes(m.Type));
+    const mounts = [...kept, ...checkMounts(input.mounts, {roots: mountRoots})];
+    if (mounts.length) t.ContainerSpec.Mounts = mounts; else delete t.ContainerSpec.Mounts;
+  }
+  if (input.hosts !== undefined) {
+    const key = routerRuleKey(spec.Labels);
+    if (!key) throw fail(400, 'This service has no Traefik router to change hostnames on');
+    spec.Labels[key] = hostRule(checkHosts(input.hosts));
+  }
+  if (input.updateOrder !== undefined || input.updateParallelism !== undefined) {
+    if (input.updateOrder !== undefined && !['stop-first', 'start-first'].includes(input.updateOrder)) throw fail(400, 'Update order must be stop-first or start-first');
+    if (input.updateParallelism !== undefined && !(Number.isInteger(input.updateParallelism) && input.updateParallelism >= 0 && input.updateParallelism <= 20)) throw fail(400, 'Update parallelism must be a whole number from 0 to 20');
+    spec.UpdateConfig = {...spec.UpdateConfig,
+      ...(input.updateOrder !== undefined ? {Order: input.updateOrder} : {}),
+      ...(input.updateParallelism !== undefined ? {Parallelism: input.updateParallelism} : {})};
+  }
+  // A service that now keeps local state would otherwise be classified as infrastructure and vanish from the console.
+  if ((input.constraints !== undefined || input.mounts !== undefined) && classify({Spec: spec}, {selfName: '\0'}) === 'protected') {
+    spec.Labels = {...spec.Labels, [managedLabel]: 'true'};
+    if (classify({Spec: spec}, {selfName: '\0'}) === 'protected') throw fail(400, 'Those placement or storage settings are not allowed for this service');
+  }
 }
 
 // Archive scales to 0 and unarchive scales to 1. The rest of the spec is untouched.

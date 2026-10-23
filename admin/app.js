@@ -207,6 +207,63 @@ function renderOverview(panel, s) {
       mk('td', {textContent: [t.message, t.error, t.exitCode !== null && t.exitCode !== undefined ? `exit ${t.exitCode}` : ''].filter(Boolean).join(' · ')}), mk('td', {textContent: when(t.updatedAt)}))))));
 }
 
+// ---------- Placement, storage and rollout (administrators) ----------
+// Returns a function that gives only the settings the administrator actually changed.
+function placementSection(form, s) {
+  const box = mk('div', {className: 'placement'}, mk('h3', {textContent: 'Placement, storage and rollout'}));
+  const lines = value => value.split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
+
+  const constraints = mk('textarea', {rows: 2, spellcheck: false, placeholder: 'node.hostname==my-server'}); constraints.value = s.constraints.join('\n');
+  box.append(mk('label', {textContent: 'Run only on (one placement constraint per line)'}, constraints));
+  if (s.nodeOptions.length) {
+    const pick = mk('select', {}, mk('option', {value: '', textContent: 'Pin to a node…'}), ...s.nodeOptions.map(n => mk('option', {value: n, textContent: n})));
+    pick.onchange = () => { if (!pick.value) return; const line = `node.hostname==${pick.value}`; if (!lines(constraints.value).includes(line)) constraints.value = [...lines(constraints.value).filter(c => !c.startsWith('node.hostname==')), line].join('\n'); pick.value = ''; };
+    box.append(pick);
+  }
+
+  const hosts = mk('textarea', {rows: 2, spellcheck: false, placeholder: 'app.example.com'}); hosts.value = s.hosts.join('\n');
+  if (s.hosts.length) box.append(mk('label', {textContent: 'Domains (one per line; point their DNS at this server)'}, hosts));
+
+  box.append(mk('h4', {textContent: 'Storage'}));
+  const rows = mk('div', {className: 'mounts'}); box.append(rows);
+  const kinds = [['folder', 'Host folder'], ['volume', 'Docker volume'], ['bind', 'Direct bind']];
+  const kindOf = m => m.type === 'bind' ? 'bind' : m.hostPath ? 'folder' : 'volume';
+  function addRow(m = {type: 'volume', source: '', hostPath: '', target: '', readOnly: false}) {
+    const kind = mk('select', {}, ...kinds.map(([v, t]) => mk('option', {value: v, textContent: t}))); kind.value = kindOf(m);
+    const name = mk('input', {placeholder: 'volume name', value: m.type === 'volume' ? m.source : '', spellcheck: false});
+    const host = mk('input', {placeholder: '/var/lib/my-data', value: m.type === 'bind' ? m.source : m.hostPath || '', spellcheck: false});
+    const target = mk('input', {placeholder: '/data', value: m.target, spellcheck: false});
+    const ro = mk('input', {type: 'checkbox', checked: !!m.readOnly}); ro.setAttribute('aria-label', 'Read only');
+    const row = mk('div', {className: 'mount-row'}, kind, name, host, target, mk('label', {className: 'inline'}, ro, 'read-only'), mk('button', {type: 'button', className: 'secondary small', textContent: 'Remove', onclick: () => row.remove()}));
+    const sync = () => { name.hidden = kind.value === 'bind'; host.hidden = kind.value === 'volume'; };
+    kind.onchange = sync; sync();
+    row.value = () => kind.value === 'bind' ? {type: 'bind', source: host.value.trim(), target: target.value.trim(), readOnly: ro.checked}
+      : kind.value === 'folder' ? {type: 'volume', source: name.value.trim(), hostPath: host.value.trim(), target: target.value.trim(), readOnly: ro.checked}
+      : {type: 'volume', source: name.value.trim(), target: target.value.trim(), readOnly: ro.checked};
+    rows.append(row);
+  }
+  s.mounts.forEach(addRow);
+  box.append(mk('button', {type: 'button', className: 'secondary small', textContent: '+ Add storage', onclick: () => addRow()}));
+  box.append(mk('p', {className: 'muted', textContent: s.mountRoots.length
+    ? `Host folders must be inside: ${s.mountRoots.join(', ')}. A host folder is exposed as a named volume so the service stays manageable here. The container user must own the folder on the server.`
+    : 'Host folders are disabled. Set ADMIN_ALLOWED_MOUNT_ROOTS on the management service (for example /var/lib/my-data) to allow them. Docker volumes still work.'}));
+
+  const order = mk('select', {}, ...[['stop-first', 'Stop the old copy first (one writer at a time)'], ['start-first', 'Start the new copy first (no downtime)']].map(([v, t]) => mk('option', {value: v, textContent: t}))); order.value = s.updateOrder;
+  box.append(mk('label', {textContent: 'When redeploying'}, order));
+  form.append(box);
+
+  return () => {
+    const out = {};
+    const c = lines(constraints.value); if (JSON.stringify(c) !== JSON.stringify(s.constraints)) out.constraints = c;
+    if (s.hosts.length) { const h = lines(hosts.value).map(x => x.toLowerCase()); if (JSON.stringify(h) !== JSON.stringify(s.hosts)) out.hosts = h; }
+    const mounts = [...rows.children].map(r => r.value());
+    const norm = list => JSON.stringify(list.map(m => ({type: m.type, source: m.source || '', hostPath: m.hostPath || '', target: m.target, readOnly: !!m.readOnly})));
+    if (norm(mounts) !== norm(s.mounts)) out.mounts = mounts;
+    if (order.value !== s.updateOrder) out.updateOrder = order.value;
+    return out;
+  };
+}
+
 function renderSettings(panel, s) {
   const form = mk('form', {className: 'settings-form'});
   const field = (title, props) => { const input = mk('input', props); form.append(mk('label', {textContent: title}, input)); return input; };
@@ -226,6 +283,7 @@ function renderSettings(panel, s) {
   const memory = g('Memory MB (0 = unlimited)', {type: 'number', min: 0, max: 1048576, step: 'any', value: s.memoryMB, required: true});
   const restart = mk('select', {}, ...[['any', 'Always'], ['on-failure', 'On failure'], ['none', 'Never']].map(([v, t]) => mk('option', {value: v, textContent: t}))); restart.value = s.restart;
   grid.append(mk('label', {textContent: 'Restart policy'}, restart));
+  const readPlacement = s.canEditPlacement ? placementSection(form, s) : null;
   if (editable) form.append(mk('p', {className: 'muted', textContent: s.kind === 'control' ? 'Changes restart the management service. Keep at least one replica.' : 'Saving redeploys the service with the current environment and secrets. Zero replicas archives it.'}),
     mk('button', {type: 'submit', textContent: 'Save & redeploy'}));
   else {
@@ -238,6 +296,7 @@ function renderSettings(panel, s) {
     if (!confirm(`Save settings and redeploy ${s.name}?`)) return;
     const body = {version: s.version, env: s.env, replicas: Number(replicas.value), cpus: Number(cpus.value), memoryMB: Number(memory.value), restart: restart.value};
     if (image && image.value !== s.image) body.image = image.value;
+    if (readPlacement) Object.assign(body, readPlacement());
     const r = await api('/services/' + encodeURIComponent(s.id), body); message(r.message + (r.warnings.length ? ' ' + r.warnings.join(' ') : ''));
     await loadServices(); if (s.kind !== 'control') await openService(s.id, 'settings');
   }); };
